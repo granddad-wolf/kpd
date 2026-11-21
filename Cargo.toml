@@ -17,10 +17,8 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.97"
 license = "Apache-2.0 OR MIT"
-# `repository` is omitted until the real repository exists: a workspace.package
-# field is only inheritable, and Cargo warns when nothing inherits it. Add it
-# here and `repository.workspace = true` to each crate once publishing starts.
-authors = ["REPLACE_AUTHOR <you@example.com>"]      # TODO: set
+repository = "https://github.com/granddad-wolf/kpd"
+authors = ["Maksim Tkachenko <347383041+granddad-wolf@users.noreply.github.com>"]
 
 # Note: real dependencies are added per-crate with `cargo add` during each
 # implementation sprint so versions pin correctly on the Linux box. The stub

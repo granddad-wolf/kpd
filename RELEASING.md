@@ -14,7 +14,7 @@ Checklist for cutting a release (once the first build/test passes on Linux).
 
 - [ ] Bump `version` in the workspace `[workspace.package]` (single source).
 - [ ] Update `CHANGELOG.md` (add one once a release exists).
-- [ ] Replace `REPLACE_OWNER` / `REPLACE_AUTHOR` in `Cargo.toml` with real values.
+- [ ] Confirm `repository` and `authors` in the workspace `Cargo.toml` are current.
 - [ ] Confirm `rust-version` matches the lowest toolchain you actually support.
 - [ ] Confirm the dual `Apache-2.0 OR MIT` license is declared in every crate
       (`license.workspace = true`) and both `LICENSE-APACHE`/`LICENSE-MIT` are
