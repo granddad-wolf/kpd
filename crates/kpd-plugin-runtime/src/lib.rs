@@ -172,14 +172,12 @@ impl PluginRuntime {
         // Satisfy the WASI P2 imports a Rust wasm32-wasip2 component links into
         // itself, with an EMPTY WasiCtx: no filesystem, no network, no env, no
         // args (only io/poll, clocks, random are reachable).
-        wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
-            .map_err(PluginError::Instantiate)?;
+        wasmtime_wasi::p2::add_to_linker_sync(&mut linker).map_err(PluginError::Instantiate)?;
 
         // The capability contract: only the world's three imported interfaces.
-        bindings::Plugin::add_to_linker::<_, HasSelf<_>>(
-            &mut linker,
-            |state: &mut HostState| state,
-        )
+        bindings::Plugin::add_to_linker::<_, HasSelf<_>>(&mut linker, |state: &mut HostState| {
+            state
+        })
         .map_err(PluginError::Instantiate)?;
 
         // Max-memory limiter, plus a deterministic trap on grow failure.
@@ -282,7 +280,10 @@ struct HostState {
 
 impl WasiView for HostState {
     fn ctx(&mut self) -> WasiCtxView<'_> {
-        WasiCtxView { ctx: &mut self.wasi, table: &mut self.table }
+        WasiCtxView {
+            ctx: &mut self.wasi,
+            table: &mut self.table,
+        }
     }
 }
 
