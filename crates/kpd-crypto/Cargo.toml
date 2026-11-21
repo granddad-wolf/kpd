@@ -1,0 +1,16 @@
+[package]
+name = "kpd-crypto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Key derivation and secret hygiene (zeroize) helpers for kpd."
+
+[dependencies]
+# zeroize 1.x. Pinned to `1.8` (resolves 1.8.2) as a known-good release; the
+# workspace MSRV is now 1.97, so a newer 1.x would also work if needed.
+zeroize = "1.8"
+
+[lints]
+workspace = true

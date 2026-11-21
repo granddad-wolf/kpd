@@ -1,0 +1,20 @@
+[package]
+name = "kpd-kdbx"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "KDBX read-only wrapper over the keepass crate."
+
+[dependencies]
+chrono = "0.4"
+keepass = { version = "0.17", features = ["save_kdbx4"] }
+secrecy = "0.10"
+thiserror = "2"
+uuid = "1"
+kpd-core = { path = "../kpd-core" }
+kpd-crypto = { path = "../kpd-crypto" }
+
+[lints]
+workspace = true

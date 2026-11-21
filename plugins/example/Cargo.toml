@@ -1,0 +1,12 @@
+[package]
+name = "kpd-plugin-example"
+version = "0.1.0"
+edition = "2021"
+
+# A component-model plugin: cdylib + the wasm32-wasip2 target emits a
+# WebAssembly *component* directly (no wasm-tools wrapping step needed).
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.63.0"

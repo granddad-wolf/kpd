@@ -1,0 +1,13 @@
+[package]
+name = "kpd-plugin-api"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Documentation crate owning the WIT world (the plugin capability contract) for kpd."
+
+[dependencies]
+
+[lints]
+workspace = true

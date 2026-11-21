@@ -1,0 +1,20 @@
+# Rust
+/target
+**/*.rs.bk
+
+# Secrets & password databases — never commit these
+*.kdbx
+*.kdbx.bak
+*.key
+*.pem
+.env
+.env.*
+secrets/
+.secrets/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+
+# NOTE: Cargo.lock is intentionally committed (this is a binary application).

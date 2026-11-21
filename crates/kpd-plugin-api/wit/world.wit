@@ -1,0 +1,33 @@
+package kpd:plugin@0.1.0;
+
+/// A filtered, capability-gated view of entries. Never exposes secrets or the
+/// master key; only uuid/title/username. Requires the `entries.read` permission.
+interface entries {
+    record entry-summary {
+        uuid: string,
+        title: string,
+        username: string,
+    }
+
+    /// List summaries whose title/username match `query` (empty = all).
+    list-entries: func(query: string) -> list<entry-summary>;
+}
+
+/// Copy text to the host clipboard. Requires the `clipboard.write` permission.
+interface clipboard {
+    copy: func(text: string) -> bool;
+}
+
+/// Append a line to the host log. Always available.
+interface logging {
+    log: func(message: string);
+}
+
+/// The plugin world: a plugin may call ONLY the interfaces imported here.
+/// There is no `wasi:*` import, so plugins have no filesystem or network.
+world plugin {
+    import entries;
+    import clipboard;
+    import logging;
+    export run: func(command: string, args: list<string>) -> string;
+}

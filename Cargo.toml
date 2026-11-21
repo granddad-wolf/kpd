@@ -1,0 +1,35 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/kpd",
+    "crates/kpd-core",
+    "crates/kpd-crypto",
+    "crates/kpd-kdbx",
+    "crates/kpd-tui",
+    "crates/kpd-clipboard",
+    "crates/kpd-storage",
+    "crates/kpd-plugin-api",
+    "crates/kpd-plugin-runtime",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "Apache-2.0 OR MIT"
+# `repository` is omitted until the real repository exists: a workspace.package
+# field is only inheritable, and Cargo warns when nothing inherits it. Add it
+# here and `repository.workspace = true` to each crate once publishing starts.
+authors = ["REPLACE_AUTHOR <you@example.com>"]      # TODO: set
+
+# Note: real dependencies are added per-crate with `cargo add` during each
+# implementation sprint so versions pin correctly on the Linux box. The stub
+# crates intentionally have zero deps so the workspace builds immediately.
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"
+nursery = "warn"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"

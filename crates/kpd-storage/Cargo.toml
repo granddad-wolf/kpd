@@ -1,0 +1,38 @@
+[package]
+name = "kpd-storage"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Storage trait and backends (local, OAuth, WebDAV, S3) for kpd."
+
+[dependencies]
+# Type erasure for async trait methods. Latest is 0.1.92 (MSRV 1.71).
+async-trait = "0.1"
+# Async HTTP client for the WebDAV backend. 0.12.x (latest 0.12.15, MSRV 1.64)
+# with rustls TLS only — no default native-tls/OpenSSL. `default-features = false`
+# drops default-tls/charset/http2/system-proxy; we only need plain GET/HEAD/PUT.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+# derive(Error) for StorageError. 2.x (latest 2.0.21, MSRV 1.77).
+thiserror = "2"
+# Runtime + #[tokio::test] macro for the async tests. 1.x (latest 1.54.1, MSRV
+# 1.85). `macros` + `rt` are exactly what `#[tokio::test]` requires.
+tokio = { version = "1", features = ["macros", "rt"] }
+# WebDAV URL validation/parsing. 2.x (latest 2.5.8, MSRV 1.63).
+url = "2"
+
+# --- Dropbox backend ---
+# Base64url (no padding) for the PKCE code verifier/challenge. 0.22.x (latest
+# 0.22.1, MSRV 1.48).
+base64 = "0.22"
+# OS random source for the PKCE code verifier. 0.2.x (latest 0.2.17).
+getrandom = { version = "0.2", features = ["std"] }
+# JSON (de)serialization for Dropbox API arguments/results. 1.x.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# SHA-256 for the S256 PKCE code challenge. 0.10.x (latest 0.10.9).
+sha2 = "0.10"
+
+[lints]
+workspace = true

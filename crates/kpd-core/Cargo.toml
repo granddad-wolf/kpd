@@ -1,0 +1,16 @@
+[package]
+name = "kpd-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Domain model for kpd: Database, Group, Entry, Attachment, history, search."
+
+[dependencies]
+chrono = "0.4"
+secrecy = "0.10"
+uuid = "1"
+
+[lints]
+workspace = true

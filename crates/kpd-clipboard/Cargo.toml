@@ -1,0 +1,18 @@
+[package]
+name = "kpd-clipboard"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Clipboard copy with auto-clear for kpd secrets."
+
+[dependencies]
+# Text-only clipboard access. `image-data` (and the heavy `image` dependency
+# tree) is disabled because this crate never touches images.
+arboard = { version = "3.7", default-features = false }
+secrecy = "0.10"
+thiserror = "1"
+
+[lints]
+workspace = true
