@@ -13,8 +13,8 @@ use kpd_kdbx::open;
 #[ignore]
 fn opens_a_real_kdbx_fixture() {
     let db_path = std::env::var("KPD_TEST_DB").expect("KPD_TEST_DB must point to a .kdbx file");
-    let password =
-        std::env::var("KPD_TEST_PASSWORD").expect("KPD_TEST_PASSWORD must hold the master password");
+    let password = std::env::var("KPD_TEST_PASSWORD")
+        .expect("KPD_TEST_PASSWORD must hold the master password");
 
     let key = CompositeKey::new().with_password(password);
     let database = open(Path::new(&db_path), &key).expect("fixture should open");

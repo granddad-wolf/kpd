@@ -265,10 +265,7 @@ struct HostState {
 
 /// `entries` interface: a filtered, capability-gated list of summaries.
 impl bindings::kpd::plugin::entries::Host for HostState {
-    fn list_entries(
-        &mut self,
-        query: String,
-    ) -> Vec<bindings::kpd::plugin::entries::EntrySummary> {
+    fn list_entries(&mut self, query: String) -> Vec<bindings::kpd::plugin::entries::EntrySummary> {
         if !permits(&self.permissions, Permission::EntriesRead) {
             return Vec::new();
         }
@@ -316,8 +313,7 @@ fn matches_query(entry: &EntrySummary, query: &str) -> bool {
         return true;
     }
     let query = query.to_lowercase();
-    entry.title.to_lowercase().contains(&query)
-        || entry.username.to_lowercase().contains(&query)
+    entry.title.to_lowercase().contains(&query) || entry.username.to_lowercase().contains(&query)
 }
 
 #[cfg(test)]

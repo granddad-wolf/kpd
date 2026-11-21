@@ -63,7 +63,11 @@ pub trait Storage: Send + Sync {
     ///
     /// Returns [`StorageError::Conflict`] when `expected_revision` is `Some` and
     /// does not match the current revision.
-    async fn write(&self, data: &[u8], expected_revision: Option<&str>) -> Result<Meta, StorageError>;
+    async fn write(
+        &self,
+        data: &[u8],
+        expected_revision: Option<&str>,
+    ) -> Result<Meta, StorageError>;
 
     /// Whether the stored database currently exists.
     async fn exists(&self) -> Result<bool, StorageError>;

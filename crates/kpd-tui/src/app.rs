@@ -28,7 +28,10 @@ pub enum Status {
     Info(String),
     /// A secret was just copied; the renderer derives the remaining auto-clear
     /// time from `copied_at` and `timeout`.
-    Copy { copied_at: Instant, timeout: Duration },
+    Copy {
+        copied_at: Instant,
+        timeout: Duration,
+    },
 }
 
 /// The master password being typed on the unlock screen.
@@ -411,7 +414,9 @@ impl App {
         // once the final (password) step completes.
         if matches!(
             self.state.prompt,
-            Prompt::AddEntryTitle | Prompt::AddEntryUsername { .. } | Prompt::AddEntryPassword { .. }
+            Prompt::AddEntryTitle
+                | Prompt::AddEntryUsername { .. }
+                | Prompt::AddEntryPassword { .. }
         ) {
             match self.state.commit_add_entry() {
                 AddEntryOutcome::Continue => {}
@@ -442,7 +447,11 @@ impl App {
                     self.status = Status::Info("no group selected".to_string());
                     return;
                 };
-                self.mutate(false, |handle| handle.add_group(group_uuid, &name), "group added");
+                self.mutate(
+                    false,
+                    |handle| handle.add_group(group_uuid, &name),
+                    "group added",
+                );
             }
             Prompt::EditField { entry_uuid, field } => {
                 let value = std::mem::take(&mut self.state.input);
@@ -467,7 +476,9 @@ impl App {
                 );
             }
             Prompt::ConfirmSave => self.save(),
-            Prompt::AddEntryTitle | Prompt::AddEntryUsername { .. } | Prompt::AddEntryPassword { .. } => {
+            Prompt::AddEntryTitle
+            | Prompt::AddEntryUsername { .. }
+            | Prompt::AddEntryPassword { .. } => {
                 unreachable!("add-entry prompts are handled above");
             }
         }

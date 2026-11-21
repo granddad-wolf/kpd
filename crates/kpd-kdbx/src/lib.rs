@@ -394,7 +394,10 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), KdbxError> {
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
     let file_name = path.file_name().ok_or_else(|| {
-        KdbxError::Parse(format!("cannot determine the file name of {}", path.display()))
+        KdbxError::Parse(format!(
+            "cannot determine the file name of {}",
+            path.display()
+        ))
     })?;
 
     // `create_new` makes the temp-file create atomic; the retry loop tolerates
@@ -408,7 +411,11 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), KdbxError> {
             attempt
         ));
 
-        match OpenOptions::new().write(true).create_new(true).open(&candidate) {
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
             Ok(mut file) => {
                 // Write and fsync; on any failure, remove the temp file so an
                 // error or crash never leaves a stray partial file behind.
@@ -555,7 +562,10 @@ mod tests {
         let reopened_view = reopened.view();
         assert_eq!(reopened_view.root.entries.len(), 1);
         assert_eq!(reopened_view.root.entries[0].title, "Example");
-        assert_eq!(reopened_view.root.entries[0].password.expose_secret(), "hunter2");
+        assert_eq!(
+            reopened_view.root.entries[0].password.expose_secret(),
+            "hunter2"
+        );
     }
 
     #[test]
@@ -585,9 +595,7 @@ mod tests {
 
         assert!(report.round_trip_ok);
 
-        let backup = report
-            .backup_path
-            .expect("a timestamped backup path");
+        let backup = report.backup_path.expect("a timestamped backup path");
         cleanup.track(backup.clone());
         assert!(backup.exists());
 
@@ -695,7 +703,11 @@ mod tests {
             .set_entry_field(entry_uuid, EntryField::Notes, "a note")
             .expect("set notes");
         handle
-            .set_entry_field(entry_uuid, EntryField::Custom("TOTP Seed".to_string()), "secret")
+            .set_entry_field(
+                entry_uuid,
+                EntryField::Custom("TOTP Seed".to_string()),
+                "secret",
+            )
             .expect("set custom");
 
         let view = handle.view();

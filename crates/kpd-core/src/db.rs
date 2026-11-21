@@ -301,8 +301,14 @@ mod tests {
     #[test]
     fn group_by_uuid_finds_groups() {
         let db = sample_db();
-        assert_eq!(db.group_by_uuid(g_root()).map(|g| g.name.as_str()), Some("Root"));
-        assert_eq!(db.group_by_uuid(g_work()).map(|g| g.name.as_str()), Some("Work"));
+        assert_eq!(
+            db.group_by_uuid(g_root()).map(|g| g.name.as_str()),
+            Some("Root")
+        );
+        assert_eq!(
+            db.group_by_uuid(g_work()).map(|g| g.name.as_str()),
+            Some("Work")
+        );
         assert_eq!(
             db.group_by_uuid(g_projects()).map(|g| g.name.as_str()),
             Some("Projects")

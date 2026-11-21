@@ -75,12 +75,24 @@ pub enum Prompt {
     #[default]
     None,
     AddEntryTitle,
-    AddEntryUsername { title: String },
-    AddEntryPassword { title: String, username: String },
+    AddEntryUsername {
+        title: String,
+    },
+    AddEntryPassword {
+        title: String,
+        username: String,
+    },
     AddGroupName,
-    EditField { entry_uuid: Uuid, field: EntryField },
-    ConfirmDeleteEntry { entry_uuid: Uuid },
-    ConfirmDeleteGroup { group_uuid: Uuid },
+    EditField {
+        entry_uuid: Uuid,
+        field: EntryField,
+    },
+    ConfirmDeleteEntry {
+        entry_uuid: Uuid,
+    },
+    ConfirmDeleteGroup {
+        group_uuid: Uuid,
+    },
     ConfirmSave,
 }
 
@@ -360,7 +372,9 @@ impl State {
     /// The currently selected group's UUID (the target for add entry/group).
     /// Returns `None` while locked or when no group is selected.
     pub fn selected_group_uuid(&self) -> Option<Uuid> {
-        self.group_nodes().get(self.group_index).map(|node| node.uuid)
+        self.group_nodes()
+            .get(self.group_index)
+            .map(|node| node.uuid)
     }
 
     /// Append a character to the active prompt's input buffer.
@@ -514,12 +528,7 @@ impl State {
 
 /// Depth-first, pre-order flatten. `path` accumulates group names from the root
 /// down to (but excluding) the group currently being visited.
-fn collect_groups(
-    group: &Group,
-    depth: usize,
-    path: &mut Vec<String>,
-    out: &mut Vec<GroupNode>,
-) {
+fn collect_groups(group: &Group, depth: usize, path: &mut Vec<String>, out: &mut Vec<GroupNode>) {
     out.push(GroupNode {
         uuid: group.uuid,
         name: group.name.clone(),
@@ -774,7 +783,10 @@ mod tests {
         assert_eq!(refs.len(), 3);
         let paths: Vec<Vec<String>> = refs.iter().map(|r| r.group_path.clone()).collect();
         let work = ["Work".to_string()];
-        assert_eq!(paths.iter().filter(|p| p.as_slice() == &work[..]).count(), 2);
+        assert_eq!(
+            paths.iter().filter(|p| p.as_slice() == &work[..]).count(),
+            2
+        );
         assert!(paths.contains(&vec!["Work".to_string(), "Projects".to_string()]));
     }
 

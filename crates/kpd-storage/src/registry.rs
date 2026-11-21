@@ -7,7 +7,9 @@ use crate::{DropboxStorage, LocalStorage, Storage, StorageError, WebDavStorage};
 /// A backend descriptor used to construct a [`Storage`].
 #[derive(Clone)]
 pub enum BackendSpec {
-    Local { path: PathBuf },
+    Local {
+        path: PathBuf,
+    },
     WebDav {
         url: String,
         username: Option<String>,

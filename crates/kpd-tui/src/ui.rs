@@ -83,8 +83,7 @@ fn render_browse(frame: &mut Frame, app: &App) {
     ])
     .areas(frame.area());
     let [groups, entries] =
-        Layout::horizontal([Constraint::Percentage(30), Constraint::Percentage(70)])
-            .areas(main);
+        Layout::horizontal([Constraint::Percentage(30), Constraint::Percentage(70)]).areas(main);
 
     render_groups(frame, app, groups);
     render_entries(frame, app, entries);
@@ -259,12 +258,14 @@ fn prompt_label_and_hint(prompt: &Prompt) -> (&'static str, &'static str) {
         Prompt::AddEntryPassword { .. } => ("Password:", "Enter = create · Esc = cancel"),
         Prompt::AddGroupName => ("Group name:", "Enter = create · Esc = cancel"),
         Prompt::EditField { field, .. } => (edit_label(field), "Enter = save · Esc = cancel"),
-        Prompt::ConfirmDeleteEntry { .. } => {
-            ("Delete entry? (y/N):", "y = delete · any other key = cancel")
-        }
-        Prompt::ConfirmDeleteGroup { .. } => {
-            ("Delete group? (y/N):", "y = delete · any other key = cancel")
-        }
+        Prompt::ConfirmDeleteEntry { .. } => (
+            "Delete entry? (y/N):",
+            "y = delete · any other key = cancel",
+        ),
+        Prompt::ConfirmDeleteGroup { .. } => (
+            "Delete group? (y/N):",
+            "y = delete · any other key = cancel",
+        ),
         Prompt::ConfirmSave => ("Save database? (y/N):", "y = save · any other key = cancel"),
     }
 }
@@ -299,10 +300,7 @@ fn render_status(frame: &mut Frame, app: &App, area: Rect) {
     let hint = match app.status() {
         Status::Idle => "Q quit · L lock · Ctrl+F search · Ctrl+C copy".to_string(),
         Status::Info(info) => info.clone(),
-        Status::Copy {
-            copied_at,
-            timeout,
-        } => {
+        Status::Copy { copied_at, timeout } => {
             let remaining = timeout.saturating_sub(copied_at.elapsed());
             format!("copied — auto-clears in {}s", remaining.as_secs())
         }

@@ -34,8 +34,8 @@ impl WebDavStorage {
         password: Option<String>,
     ) -> Result<Self, StorageError> {
         let url = url.into();
-        let parsed =
-            url::Url::parse(&url).map_err(|e| StorageError::Config(format!("invalid WebDAV URL: {e}")))?;
+        let parsed = url::Url::parse(&url)
+            .map_err(|e| StorageError::Config(format!("invalid WebDAV URL: {e}")))?;
 
         match parsed.scheme() {
             "http" | "https" => {}
@@ -85,7 +85,11 @@ impl Storage for WebDavStorage {
         Ok(response.bytes().await.map_err(http_error)?.to_vec())
     }
 
-    async fn write(&self, data: &[u8], expected_revision: Option<&str>) -> Result<Meta, StorageError> {
+    async fn write(
+        &self,
+        data: &[u8],
+        expected_revision: Option<&str>,
+    ) -> Result<Meta, StorageError> {
         let mut request = self.request(Method::PUT);
         if let Some(value) = if_match_value(expected_revision) {
             request = request.header(IF_MATCH, value);
@@ -102,7 +106,11 @@ impl Storage for WebDavStorage {
     }
 
     async fn exists(&self) -> Result<bool, StorageError> {
-        let response = self.request(Method::HEAD).send().await.map_err(http_error)?;
+        let response = self
+            .request(Method::HEAD)
+            .send()
+            .await
+            .map_err(http_error)?;
         match response.status() {
             status if status.is_success() => Ok(true),
             StatusCode::NOT_FOUND => Ok(false),
@@ -111,7 +119,11 @@ impl Storage for WebDavStorage {
     }
 
     async fn meta(&self) -> Result<Meta, StorageError> {
-        let response = self.request(Method::HEAD).send().await.map_err(http_error)?;
+        let response = self
+            .request(Method::HEAD)
+            .send()
+            .await
+            .map_err(http_error)?;
         let response = ensure_success(response)?;
         Ok(Meta {
             revision: etag_from_headers(response.headers()),
@@ -191,8 +203,8 @@ mod tests {
 
     #[test]
     fn maps_precondition_failed_to_conflict() {
-        let err =
-            status_to_error(StatusCode::PRECONDITION_FAILED).expect("412 must map to a typed error");
+        let err = status_to_error(StatusCode::PRECONDITION_FAILED)
+            .expect("412 must map to a typed error");
         assert!(matches!(err, StorageError::Conflict(_)));
     }
 

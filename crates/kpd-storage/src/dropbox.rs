@@ -100,11 +100,18 @@ impl Storage for DropboxStorage {
         Ok(response.bytes().await.map_err(http_error)?.to_vec())
     }
 
-    async fn write(&self, data: &[u8], expected_revision: Option<&str>) -> Result<Meta, StorageError> {
+    async fn write(
+        &self,
+        data: &[u8],
+        expected_revision: Option<&str>,
+    ) -> Result<Meta, StorageError> {
         let request = self
             .request(&format!("{CONTENT_BASE}/upload"))
             .header(CONTENT_TYPE, OCTET_STREAM)
-            .header(DROPBOX_API_ARG, upload_arg(&self.remote_path, expected_revision))
+            .header(
+                DROPBOX_API_ARG,
+                upload_arg(&self.remote_path, expected_revision),
+            )
             .body(data.to_vec());
         let response = execute(request).await?;
         let body = response.bytes().await.map_err(http_error)?;
@@ -232,7 +239,10 @@ fn classify_dropbox_body(body: &[u8]) -> Option<DropboxErrorKind> {
 
 /// Whether a `get_metadata` error body means `path/not_found`.
 fn is_dropbox_not_found(body: &[u8]) -> bool {
-    matches!(classify_dropbox_body(body), Some(DropboxErrorKind::NotFound))
+    matches!(
+        classify_dropbox_body(body),
+        Some(DropboxErrorKind::NotFound)
+    )
 }
 
 /// Map a non-success Dropbox response onto a typed [`StorageError`].

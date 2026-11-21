@@ -182,11 +182,10 @@ mod tests {
         let active = Arc::new(AtomicBool::new(true));
         let ran = Arc::new(AtomicBool::new(false));
         let ran_for_thread = Arc::clone(&ran);
-        let handle = spawn_autoclear_thread(
-            Duration::from_millis(100),
-            Arc::clone(&active),
-            move || ran_for_thread.store(true, Ordering::SeqCst),
-        );
+        let handle =
+            spawn_autoclear_thread(Duration::from_millis(100), Arc::clone(&active), move || {
+                ran_for_thread.store(true, Ordering::SeqCst)
+            });
         // Disarm before the timer fires, as `cancel()` / `clear_now()` would.
         active.store(false, Ordering::SeqCst);
         handle.join().unwrap();

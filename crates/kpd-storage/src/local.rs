@@ -41,7 +41,11 @@ impl Storage for LocalStorage {
         fs::read(&self.path).map_err(|e| map_io_error(&self.path, e))
     }
 
-    async fn write(&self, data: &[u8], expected_revision: Option<&str>) -> Result<Meta, StorageError> {
+    async fn write(
+        &self,
+        data: &[u8],
+        expected_revision: Option<&str>,
+    ) -> Result<Meta, StorageError> {
         // Serialize the whole check-and-rename with other kpd writers: without
         // the lock two conditional writers could both read the same revision and
         // then overwrite each other (a lost update). The guard is released when
@@ -244,7 +248,12 @@ mod tests {
     fn dir_entries(dir: &Path) -> Vec<String> {
         fs::read_dir(dir)
             .expect("read temp dir")
-            .map(|e| e.expect("dir entry").file_name().to_string_lossy().into_owned())
+            .map(|e| {
+                e.expect("dir entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
             .collect()
     }
 
@@ -293,10 +302,9 @@ mod tests {
         // `sha256-` followed by 64 lowercase hex digits, stable across reads.
         let hex = rev.strip_prefix("sha256-").expect("sha256- prefix");
         assert_eq!(hex.len(), 64);
-        assert!(
-            hex.chars()
-                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
-        );
+        assert!(hex
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
         assert_eq!(rev, super::revision_for(data));
         assert_eq!(
             Some(rev.as_str()),
@@ -309,13 +317,19 @@ mod tests {
         let dir = TempDir::new("conflict");
         let storage = LocalStorage::new(dir.file("db.kdbx"));
 
-        let meta = storage.write(b"original", None).await.expect("initial write");
+        let meta = storage
+            .write(b"original", None)
+            .await
+            .expect("initial write");
         let stale = meta.revision.expect("revision present");
 
         // A concurrent, unconditional writer changes the file out from under us.
         // The payload is the same length as the original on purpose: this is the
         // regression case where a metadata-only revision could miss the change.
-        storage.write(b"changed!", None).await.expect("concurrent write");
+        storage
+            .write(b"changed!", None)
+            .await
+            .expect("concurrent write");
 
         let err = storage
             .write(b"mine", Some(stale.as_str()))
@@ -379,7 +393,12 @@ mod tests {
         let storage = LocalStorage::new(dir.file("db.kdbx"));
 
         storage.write(b"v1", None).await.expect("first write");
-        let rev = storage.meta().await.expect("meta").revision.expect("revision");
+        let rev = storage
+            .meta()
+            .await
+            .expect("meta")
+            .revision
+            .expect("revision");
         storage.write(b"v2", None).await.expect("second write");
 
         // A stale revision conflicts and must not leave a temp file behind.

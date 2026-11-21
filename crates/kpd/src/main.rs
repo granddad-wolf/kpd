@@ -12,8 +12,14 @@ enum Action {
 }
 
 enum CloudCommand {
-    Fetch { backend: Box<dyn Storage>, out: PathBuf },
-    Push { backend: Box<dyn Storage>, from: PathBuf },
+    Fetch {
+        backend: Box<dyn Storage>,
+        out: PathBuf,
+    },
+    Push {
+        backend: Box<dyn Storage>,
+        from: PathBuf,
+    },
 }
 
 fn main() {
@@ -102,15 +108,15 @@ fn parse_cloud(args: &[String]) -> Result<Action, String> {
     match args[0].as_str() {
         "fetch" => parse_cloud_fetch(&args[1..]),
         "push" => parse_cloud_push(&args[1..]),
-        other => Err(format!("unknown cloud command: {other} (expected fetch | push)")),
+        other => Err(format!(
+            "unknown cloud command: {other} (expected fetch | push)"
+        )),
     }
 }
 
 fn parse_cloud_fetch(args: &[String]) -> Result<Action, String> {
     if args.len() < 3 {
-        return Err(
-            "usage: kpd cloud fetch <webdav|dropbox> <url|path> <out>".to_string(),
-        );
+        return Err("usage: kpd cloud fetch <webdav|dropbox> <url|path> <out>".to_string());
     }
     let backend = cloud_backend(&args[0], &args[1])?;
     let out = PathBuf::from(&args[2]);
@@ -119,9 +125,7 @@ fn parse_cloud_fetch(args: &[String]) -> Result<Action, String> {
 
 fn parse_cloud_push(args: &[String]) -> Result<Action, String> {
     if args.len() < 3 {
-        return Err(
-            "usage: kpd cloud push <webdav|dropbox> <url|path> <from>".to_string(),
-        );
+        return Err("usage: kpd cloud push <webdav|dropbox> <url|path> <from>".to_string());
     }
     let backend = cloud_backend(&args[0], &args[1])?;
     let from = PathBuf::from(&args[2]);
@@ -157,15 +161,17 @@ fn run_cloud(command: CloudCommand) -> Result<(), String> {
         match command {
             CloudCommand::Fetch { backend, out } => {
                 let data = backend.read().await.map_err(|e| e.to_string())?;
-                std::fs::write(&out, &data)
-                    .map_err(|e| format!("write {}: {e}", out.display()))?;
+                std::fs::write(&out, &data).map_err(|e| format!("write {}: {e}", out.display()))?;
                 eprintln!("fetched {} bytes -> {}", data.len(), out.display());
                 Ok(())
             }
             CloudCommand::Push { backend, from } => {
-                let data = std::fs::read(&from)
-                    .map_err(|e| format!("read {}: {e}", from.display()))?;
-                let meta = backend.write(&data, None).await.map_err(|e| e.to_string())?;
+                let data =
+                    std::fs::read(&from).map_err(|e| format!("read {}: {e}", from.display()))?;
+                let meta = backend
+                    .write(&data, None)
+                    .await
+                    .map_err(|e| e.to_string())?;
                 let rev = meta.revision.unwrap_or_default();
                 eprintln!("pushed {} bytes (revision: {rev})", data.len());
                 Ok(())
@@ -229,7 +235,10 @@ mod tests {
 
     #[test]
     fn open_parses_into_run_action() {
-        let args: Vec<String> = ["open", "/tmp/db.kdbx"].iter().map(|s| s.to_string()).collect();
+        let args: Vec<String> = ["open", "/tmp/db.kdbx"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         assert!(matches!(parse(&args), Ok(Action::Run(_))));
     }
 }
