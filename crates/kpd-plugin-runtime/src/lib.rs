@@ -35,6 +35,9 @@ use std::path::Path;
 use wasmtime::component::{Component, HasSelf};
 use wasmtime::{Engine, Store, StoreLimits, StoreLimitsBuilder};
 
+use wasmtime::component::ResourceTable;
+use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
+
 /// Generated host bindings for the `plugin` world.
 ///
 /// The `bindgen!` path is resolved relative to this crate's `Cargo.toml`
@@ -163,11 +166,17 @@ impl PluginRuntime {
     ) -> Result<Plugin, PluginError> {
         let component = Component::from_file(&self.engine, path).map_err(PluginError::Load)?;
 
-        // Wire ONLY the world's three imported interfaces. No WASI, no fs, no
-        // network — a hostile plugin's imports beyond `entries`/`clipboard`/
-        // `logging` simply fail to instantiate.
+        // One linker: WASI (empty context) + the world's capability interfaces.
         let mut linker = wasmtime::component::Linker::<HostState>::new(&self.engine);
-        bindings::Plugin::add_to_linker::<_, HasSelf<HostState>>(
+
+        // Satisfy the WASI P2 imports a Rust wasm32-wasip2 component links into
+        // itself, with an EMPTY WasiCtx: no filesystem, no network, no env, no
+        // args (only io/poll, clocks, random are reachable).
+        wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
+            .map_err(PluginError::Instantiate)?;
+
+        // The capability contract: only the world's three imported interfaces.
+        bindings::Plugin::add_to_linker::<_, HasSelf<_>>(
             &mut linker,
             |state: &mut HostState| state,
         )
@@ -187,9 +196,15 @@ impl PluginRuntime {
                 copied: Vec::new(),
                 logs: Vec::new(),
                 limits: store_limits,
+                wasi: WasiCtxBuilder::new().build(),
+                table: ResourceTable::new(),
             },
         );
         store.limiter(|state: &mut HostState| &mut state.limits);
+
+        // The store starts at 0 fuel under `consume_fuel`; give instantiation a
+        // budget too (run() re-sets it per call).
+        store.set_fuel(limits.fuel).map_err(PluginError::Limit)?;
 
         let instance = bindings::Plugin::instantiate(&mut store, &component, &linker)
             .map_err(PluginError::Instantiate)?;
@@ -261,6 +276,14 @@ struct HostState {
     copied: Vec<String>,
     logs: Vec<String>,
     limits: StoreLimits,
+    wasi: WasiCtx,
+    table: ResourceTable,
+}
+
+impl WasiView for HostState {
+    fn ctx(&mut self) -> WasiCtxView<'_> {
+        WasiCtxView { ctx: &mut self.wasi, table: &mut self.table }
+    }
 }
 
 /// `entries` interface: a filtered, capability-gated list of summaries.

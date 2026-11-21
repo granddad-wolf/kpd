@@ -11,6 +11,7 @@ description = "Host loader and capability-gated sandbox (wasmtime) for kpd plugi
 [dependencies]
 wasmtime = "50.0.2"
 thiserror = "2"
+wasmtime-wasi = "50.0.2"
 
 [lints]
 workspace = true

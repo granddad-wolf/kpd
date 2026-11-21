@@ -10,6 +10,7 @@
 //!   * `copy <text>`         -> `clipboard.copy(text)`, reported as "true"/"false"
 //!   * anything else         -> usage text
 
+
 mod bindings {
     wit_bindgen::generate!({
         path: "../../crates/kpd-plugin-api/wit/world.wit",

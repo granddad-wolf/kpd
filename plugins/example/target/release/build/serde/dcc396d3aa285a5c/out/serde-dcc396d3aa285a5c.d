@@ -1,0 +1,14 @@
+/home/rdpadmin/kpd/plugins/example/target/release/build/serde/dcc396d3aa285a5c/out/serde-dcc396d3aa285a5c.d: /home/rdpadmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs /home/rdpadmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs /home/rdpadmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs /home/rdpadmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs /home/rdpadmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs /home/rdpadmin/kpd/plugins/example/target/release/build/serde/88aa362d8775a868/out/private.rs
+
+/home/rdpadmin/kpd/plugins/example/target/release/build/serde/dcc396d3aa285a5c/out/libserde-dcc396d3aa285a5c.rlib: /home/rdpadmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs /home/rdpadmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs /home/rdpadmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs /home/rdpadmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs /home/rdpadmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs /home/rdpadmin/kpd/plugins/example/target/release/build/serde/88aa362d8775a868/out/private.rs
+
+/home/rdpadmin/kpd/plugins/example/target/release/build/serde/dcc396d3aa285a5c/out/libserde-dcc396d3aa285a5c.rmeta: /home/rdpadmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs /home/rdpadmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs /home/rdpadmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs /home/rdpadmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs /home/rdpadmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs /home/rdpadmin/kpd/plugins/example/target/release/build/serde/88aa362d8775a868/out/private.rs
+
+/home/rdpadmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs:
+/home/rdpadmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs:
+/home/rdpadmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs:
+/home/rdpadmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs:
+/home/rdpadmin/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs:
+/home/rdpadmin/kpd/plugins/example/target/release/build/serde/88aa362d8775a868/out/private.rs:
+
+# env-dep:OUT_DIR=/home/rdpadmin/kpd/plugins/example/target/release/build/serde/88aa362d8775a868/out
