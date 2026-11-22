@@ -1,7 +1,7 @@
 //! Runtime application state and key handling: the terminal-aware glue that
 //! connects the pure [`state::State`] machine to crossterm key events, the
-//! clipboard, and the unlock flow. Secrets are held only where the `State`
-//! machine or [`ClipboardGuard`] already owns them.
+//! clipboard, and the unlock flow (local file or cloud storage). Secrets are
+//! held only where the `State` machine or [`ClipboardGuard`] already owns them.
 
 use std::time::{Duration, Instant};
 
@@ -10,9 +10,10 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use kpd_clipboard::{copy_autoclear, ClipboardGuard};
 use kpd_crypto::CompositeKey;
 use kpd_kdbx::{DbHandle, EntryField, SaveOptions};
+use kpd_storage::{from_spec, Storage, StorageError};
 
 use crate::state::{AddEntryOutcome, Move, Prompt, Screen, State};
-use crate::AppConfig;
+use crate::{AppConfig, DbLocation};
 
 /// What the event loop should do after a key is handled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,6 +63,30 @@ impl UnlockInput {
     }
 }
 
+/// The cloud backend and the remote revision the session was opened at.
+struct CloudSession {
+    storage: Box<dyn Storage>,
+    /// Passed as `expected_revision` on save so a concurrent remote change
+    /// surfaces as a conflict instead of being overwritten.
+    revision: Option<String>,
+}
+
+/// Work deferred out of the key handler because it does network I/O.
+///
+/// The event loop redraws the "busy" message first, then calls
+/// [`App::run_pending`] so the blocking fetch/upload does not hide its own
+/// progress.
+enum Pending {
+    /// Fetch and decrypt the remote database for this key.
+    Unlock {
+        key: CompositeKey,
+        storage: Box<dyn Storage>,
+    },
+    /// Upload the serialized in-memory database. `upgraded` carries whether
+    /// the save is the one that promoted the database to KDBX 4.1.
+    Save { upgraded: bool },
+}
+
 /// The full runtime application state.
 pub struct App {
     pub config: AppConfig,
@@ -75,6 +100,13 @@ pub struct App {
     unlock_error: Option<String>,
     status: Status,
     clipboard_guard: Option<ClipboardGuard>,
+    /// The cloud backend for a remote database; `None` for local files and
+    /// while locked.
+    cloud: Option<CloudSession>,
+    /// Network work to run right after the next redraw.
+    pending: Option<Pending>,
+    /// Message shown while `pending` work runs (e.g. `fetching <url>`).
+    busy: Option<String>,
 }
 
 impl App {
@@ -88,6 +120,33 @@ impl App {
             unlock_error: None,
             status: Status::Idle,
             clipboard_guard: None,
+            cloud: None,
+            pending: None,
+            busy: None,
+        }
+    }
+
+    /// Whether deferred network work is waiting to run (the event loop must
+    /// redraw and then call [`App::run_pending`]).
+    pub const fn is_busy(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    /// The in-flight message to show while busy, if any.
+    pub fn busy_label(&self) -> Option<&str> {
+        self.busy.as_deref()
+    }
+
+    /// Run the deferred work queued by the last key press. Blocking: callers
+    /// redraw first so the busy message is visible during the network I/O.
+    pub fn run_pending(&mut self) {
+        let Some(pending) = self.pending.take() else {
+            return;
+        };
+        self.busy = None;
+        match pending {
+            Pending::Unlock { key, storage } => self.finish_cloud_unlock(key, storage),
+            Pending::Save { upgraded } => self.save_cloud(upgraded),
         }
     }
 
@@ -107,6 +166,10 @@ impl App {
 
     /// Handle one key press, returning whether the app should quit.
     pub fn handle_key(&mut self, key: &KeyEvent) -> Control {
+        // Deferred network work owns the session until it finishes.
+        if self.pending.is_some() {
+            return Control::Continue;
+        }
         // A plugin-output modal captures the keyboard until dismissed.
         if self.state.plugin_result.is_some() {
             self.state.dismiss_plugin_result();
@@ -187,20 +250,82 @@ impl App {
         }
         key = key.with_password(password);
 
-        match DbHandle::open(&self.config.db_path, &key) {
+        match &self.config.location {
+            DbLocation::Local(path) => match DbHandle::open(path, &key) {
+                Ok(handle) => {
+                    let view = handle.view();
+                    self.unlock_error = None;
+                    self.handle = Some(handle);
+                    self.key = Some(key);
+                    self.cloud = None;
+                    self.state.unlock(view);
+                    self.status = Status::Idle;
+                }
+                Err(err) => self.fail_unlock(err.to_string()),
+            },
+            DbLocation::Cloud(spec) => {
+                // Validate the backend config now (bad URLs fail before the key
+                // is parked); the network fetch is deferred to `run_pending`.
+                match from_spec(spec.clone()) {
+                    Ok(storage) => {
+                        self.unlock_error = None;
+                        self.busy = Some(format!(
+                            "fetching {} \u{2014} this may take a moment",
+                            self.config.location.label()
+                        ));
+                        self.pending = Some(Pending::Unlock { key, storage });
+                    }
+                    Err(err) => self.fail_unlock(err.to_string()),
+                }
+            }
+        }
+    }
+
+    /// Surface an unlock failure and force the password to be re-entered.
+    fn fail_unlock(&mut self, message: String) {
+        // Any parked key is dropped here and zeroizes itself.
+        self.unlock_error = Some(message);
+        self.unlock = UnlockInput::default();
+        self.busy = None;
+    }
+
+    /// Fetch the cloud database, decrypt it with the session key, and enter the
+    /// browse screen. Called from [`App::run_pending`] after the busy message has
+    /// been drawn.
+    fn finish_cloud_unlock(&mut self, key: CompositeKey, storage: Box<dyn Storage>) {
+        let Ok(runtime) = tokio::runtime::Runtime::new() else {
+            self.fail_unlock("could not start the cloud runtime".to_string());
+            return;
+        };
+        let fetched = runtime.block_on(async {
+            let meta = storage.meta().await?;
+            let bytes = storage.read().await?;
+            Ok::<_, StorageError>((bytes, meta.revision))
+        });
+
+        let (bytes, revision) = match fetched {
+            Ok(fetched) => fetched,
+            Err(err) => {
+                self.fail_unlock(format!("cloud fetch failed: {err}"));
+                return;
+            }
+        };
+
+        match DbHandle::open_bytes(&bytes, &key) {
             Ok(handle) => {
                 let view = handle.view();
                 self.unlock_error = None;
                 self.handle = Some(handle);
                 self.key = Some(key);
+                self.cloud = Some(CloudSession { storage, revision });
                 self.state.unlock(view);
-                self.status = Status::Idle;
+                self.status = Status::Info(format!(
+                    "loaded {} bytes from {}",
+                    bytes.len(),
+                    self.config.location.label()
+                ));
             }
-            Err(err) => {
-                // `key` drops here (zeroized); force re-entry on failure.
-                self.unlock_error = Some(err.to_string());
-                self.unlock = UnlockInput::default();
-            }
+            Err(err) => self.fail_unlock(err.to_string()),
         }
     }
 
@@ -651,6 +776,18 @@ impl App {
             return;
         };
 
+        if self.config.location.is_cloud() {
+            // Defer the upload so the event loop can draw the busy message; the
+            // upgrade above is already in memory, so `save_cloud` only needs to
+            // serialize and push.
+            self.busy = Some(format!(
+                "saving to {} \u{2014} this may take a moment",
+                self.config.location.label()
+            ));
+            self.pending = Some(Pending::Save { upgraded });
+            return;
+        }
+
         match handle.save(key, &SaveOptions::default()) {
             Ok(report) => {
                 let mut msg = format!("saved {} bytes", report.bytes_written);
@@ -664,6 +801,54 @@ impl App {
                     msg.push_str(" — warnings present");
                 }
                 self.status = Status::Info(msg);
+            }
+            Err(err) => self.status = Status::Info(format!("save failed: {err}")),
+        }
+    }
+
+    /// Serialize the in-memory database and upload it with the revision the
+    /// session was opened at. A revision mismatch surfaces as a conflict and
+    /// leaves the remote untouched.
+    fn save_cloud(&mut self, upgraded: bool) {
+        let Some(handle) = self.handle.as_ref() else {
+            self.status = Status::Info("not unlocked".to_string());
+            return;
+        };
+        let Some(key) = self.key.as_ref() else {
+            self.status = Status::Info("no session key".to_string());
+            return;
+        };
+        let serialized = handle.serialize(key);
+        let bytes = match serialized {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                self.status = Status::Info(format!("save failed: {err}"));
+                return;
+            }
+        };
+
+        let Some(cloud) = self.cloud.as_mut() else {
+            self.status = Status::Info("no cloud session — unlock again".to_string());
+            return;
+        };
+        let Ok(runtime) = tokio::runtime::Runtime::new() else {
+            self.status = Status::Info("could not start the cloud runtime".to_string());
+            return;
+        };
+        let label = self.config.location.label();
+        match runtime.block_on(cloud.storage.write(&bytes, cloud.revision.as_deref())) {
+            Ok(meta) => {
+                cloud.revision = meta.revision;
+                let mut msg = format!("saved {} bytes to {}", bytes.len(), label);
+                if upgraded {
+                    msg.push_str(" — upgraded to KDBX 4.1");
+                }
+                self.status = Status::Info(msg);
+            }
+            Err(StorageError::Conflict(_)) => {
+                self.status = Status::Info(format!(
+                    "conflict: {label} changed remotely — lock (L) and unlock to reload; edits kept in memory"
+                ));
             }
             Err(err) => self.status = Status::Info(format!("save failed: {err}")),
         }
@@ -702,9 +887,13 @@ impl App {
     fn lock(&mut self) {
         // Clear any copied secret immediately on lock.
         self.clear_clipboard_guard();
-        // Drop the write handle and the session key (zeroized on drop).
+        // Drop the write handle, the cloud session and the session key
+        // (zeroized on drop).
         self.handle = None;
         self.key = None;
+        self.cloud = None;
+        self.pending = None;
+        self.busy = None;
         self.state.lock();
         self.status = Status::Idle;
         self.unlock = UnlockInput::default();
@@ -741,4 +930,233 @@ fn discover_plugins() -> Vec<std::path::PathBuf> {
     out.sort();
     out.dedup();
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    use keepass::db::fields;
+    use keepass::{Database as KpDatabase, DatabaseKey};
+    use secrecy::ExposeSecret;
+
+    const PASSWORD: &str = "test master password";
+
+    /// A throwaway directory removed on drop (the storage write lock and any
+    /// temp files live inside it).
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos())
+                .unwrap_or(0);
+            let dir =
+                std::env::temp_dir().join(format!("kpd-tui-{tag}-{}-{nanos}", std::process::id()));
+            fs::create_dir_all(&dir).expect("create temp dir");
+            Self(dir)
+        }
+
+        fn db_path(&self) -> PathBuf {
+            self.0.join("db.kdbx")
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Write a real KDBX file with one password-protected entry per title.
+    fn seed_db(path: &Path, titles: &[&str]) {
+        let mut db = KpDatabase::new();
+        {
+            let mut root = db.root_mut();
+            for title in titles {
+                let mut entry = root.add_entry();
+                entry.set_unprotected(fields::TITLE, *title);
+                entry.set_protected(fields::PASSWORD, "hunter2");
+            }
+        }
+        let mut file = fs::File::create(path).expect("create seed db");
+        db.save(&mut file, DatabaseKey::new().with_password(PASSWORD))
+            .expect("seed save");
+    }
+
+    fn cloud_app(path: &Path) -> App {
+        App::new(AppConfig::cloud(kpd_storage::BackendSpec::Local {
+            path: path.to_path_buf(),
+        }))
+    }
+
+    /// Deliver one key press and run any deferred cloud work it queued.
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(&KeyEvent::new(code, KeyModifiers::NONE));
+        if app.is_busy() {
+            app.run_pending();
+        }
+    }
+
+    fn press_ctrl(app: &mut App, c: char) {
+        app.handle_key(&KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL));
+        if app.is_busy() {
+            app.run_pending();
+        }
+    }
+
+    fn type_text(app: &mut App, text: &str) {
+        for c in text.chars() {
+            press(app, KeyCode::Char(c));
+        }
+    }
+
+    /// Replace the edit prompt's prefilled value with `text`.
+    fn replace_input(app: &mut App, text: &str) {
+        while !app.state.input.is_empty() {
+            press(app, KeyCode::Backspace);
+        }
+        type_text(app, text);
+    }
+
+    fn unlock(app: &mut App, password: &str) {
+        type_text(app, password);
+        press(app, KeyCode::Enter);
+    }
+
+    fn info(app: &App) -> String {
+        match app.status() {
+            Status::Info(message) => message.clone(),
+            other => format!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn cloud_unlock_fetches_and_save_upload_with_revision() {
+        let dir = TempDir::new("cloud-save");
+        let path = dir.db_path();
+        seed_db(&path, &["Alpha"]);
+
+        let mut app = cloud_app(&path);
+        unlock(&mut app, PASSWORD);
+        assert_eq!(app.unlock_error(), None);
+        assert!(app.state.db.is_some(), "cloud unlock should browse the db");
+        assert!(info(&app).starts_with("loaded "), "{}", info(&app));
+
+        // Edit the selected entry's password, then save through the backend.
+        press(&mut app, KeyCode::Char('e'));
+        replace_input(&mut app, "new-password");
+        press(&mut app, KeyCode::Enter);
+        press_ctrl(&mut app, 's');
+        press(&mut app, KeyCode::Char('y'));
+        assert!(info(&app).contains("saved"), "{}", info(&app));
+
+        // The remote file really changed and reopens to the edited password.
+        let key = CompositeKey::new().with_password(PASSWORD);
+        let reopened = DbHandle::open(&path, &key).expect("reopen remote db");
+        let view = reopened.view();
+        assert_eq!(
+            view.root.entries[0].password.expose_secret(),
+            "new-password"
+        );
+
+        // The session revision was refreshed, so a second save does not conflict.
+        press_ctrl(&mut app, 's');
+        press(&mut app, KeyCode::Char('y'));
+        assert!(info(&app).contains("saved"), "second save: {}", info(&app));
+    }
+
+    #[test]
+    fn cloud_save_conflict_leaves_the_remote_untouched() {
+        let dir = TempDir::new("cloud-conflict");
+        let path = dir.db_path();
+        seed_db(&path, &["Alpha"]);
+
+        let mut app = cloud_app(&path);
+        unlock(&mut app, PASSWORD);
+        assert_eq!(app.unlock_error(), None);
+
+        // Somebody else changes the remote after this session was opened.
+        seed_db(&path, &["Alpha", "Beta"]);
+        let remote_after_change = fs::read(&path).expect("read changed remote");
+
+        press(&mut app, KeyCode::Char('e'));
+        replace_input(&mut app, "local-edit");
+        press(&mut app, KeyCode::Enter);
+        press_ctrl(&mut app, 's');
+        press(&mut app, KeyCode::Char('y'));
+
+        let status = info(&app);
+        assert!(
+            status.contains("conflict"),
+            "expected conflict, got: {status}"
+        );
+
+        // The remote bytes are exactly what the other writer left.
+        let remote_now = fs::read(&path).expect("read remote after refused save");
+        assert_eq!(remote_now, remote_after_change);
+    }
+
+    #[test]
+    fn cloud_unlock_reports_wrong_password_and_stays_locked() {
+        let dir = TempDir::new("cloud-bad-password");
+        let path = dir.db_path();
+        seed_db(&path, &["Alpha"]);
+
+        let mut app = cloud_app(&path);
+        unlock(&mut app, "not the password");
+
+        assert!(app.state.db.is_none(), "a bad password must not unlock");
+        assert!(
+            app.unlock_error()
+                .is_some_and(|err| err.contains("wrong master password")),
+            "{:?}",
+            app.unlock_error()
+        );
+        assert!(!app.is_busy());
+    }
+
+    #[test]
+    fn cloud_unlock_rejects_an_invalid_backend_before_fetching() {
+        let mut app = App::new(AppConfig::cloud(kpd_storage::BackendSpec::WebDav {
+            url: "ftp://example.com/db.kdbx".to_string(),
+            username: None,
+            password: None,
+        }));
+
+        unlock(&mut app, PASSWORD);
+
+        assert!(!app.is_busy(), "invalid config must not queue a fetch");
+        assert!(app.state.db.is_none());
+        assert!(
+            app.unlock_error()
+                .is_some_and(|err| err.contains("unsupported WebDAV URL scheme")),
+            "{:?}",
+            app.unlock_error()
+        );
+    }
+
+    #[test]
+    fn local_unlock_still_uses_the_file_save_path() {
+        let dir = TempDir::new("local-save");
+        let path = dir.db_path();
+        seed_db(&path, &["Alpha"]);
+
+        let mut app = App::new(AppConfig::new(&path));
+        unlock(&mut app, PASSWORD);
+        assert_eq!(app.unlock_error(), None);
+
+        press(&mut app, KeyCode::Char('e'));
+        replace_input(&mut app, "local-password");
+        press(&mut app, KeyCode::Enter);
+        press_ctrl(&mut app, 's');
+        press(&mut app, KeyCode::Char('y'));
+
+        let status = info(&app);
+        assert!(status.contains("saved"), "{status}");
+        assert!(status.contains("backup written"), "{status}");
+    }
 }

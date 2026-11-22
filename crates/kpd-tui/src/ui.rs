@@ -39,7 +39,7 @@ pub fn render(frame: &mut Frame, app: &App) {
 }
 
 fn render_unlock(frame: &mut Frame, app: &App) {
-    let area = centered(frame.area(), 64, 12);
+    let area = centered(frame.area(), 64, 14);
 
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(Span::styled(
@@ -49,7 +49,7 @@ fn render_unlock(frame: &mut Frame, app: &App) {
     lines.push(Line::from(""));
     lines.push(Line::from(format!(
         "Database: {}",
-        app.config.db_path.display()
+        app.config.location.label()
     )));
     match &app.config.key_file {
         Some(key_file) => lines.push(Line::from(format!("Key file: {}", key_file.display()))),
@@ -71,6 +71,12 @@ fn render_unlock(frame: &mut Frame, app: &App) {
         )));
     }
     lines.push(Line::from(""));
+    if let Some(busy) = app.busy_label() {
+        lines.push(Line::from(Span::styled(
+            busy,
+            Style::default().fg(Color::Yellow),
+        )));
+    }
     lines.push(Line::from(Span::styled(
         "Enter = unlock · Esc = quit",
         Style::default().fg(Color::DarkGray),
@@ -300,17 +306,23 @@ fn render_status(frame: &mut Frame, app: &App, area: Rect) {
     let mut spans = vec![
         Span::styled(lock_label, lock_style),
         Span::raw(" · "),
-        Span::raw(app.config.db_path.display().to_string()),
+        Span::raw(app.config.location.label()),
         Span::raw(format!(" · {} entries", app.state.entry_count())),
     ];
 
-    let hint = match app.status() {
-        Status::Idle => "Q quit · L lock · Ctrl+F search · Ctrl+C copy · P plugins".to_string(),
-        Status::Info(info) => info.clone(),
-        Status::Copy { copied_at, timeout } => {
-            let remaining = timeout.saturating_sub(copied_at.elapsed());
-            format!("copied — auto-clears in {}s", remaining.as_secs())
-        }
+    let hint = match app.busy_label() {
+        Some(busy) => busy.to_string(),
+        None => match app.status() {
+            Status::Idle => {
+                "Q quit · L lock · Ctrl+F search · Ctrl+C copy · P plugins · Ctrl+S save"
+                    .to_string()
+            }
+            Status::Info(info) => info.clone(),
+            Status::Copy { copied_at, timeout } => {
+                let remaining = timeout.saturating_sub(copied_at.elapsed());
+                format!("copied — auto-clears in {}s", remaining.as_secs())
+            }
+        },
     };
     spans.push(Span::raw("   "));
     spans.push(Span::styled(hint, Style::default().fg(Color::DarkGray)));

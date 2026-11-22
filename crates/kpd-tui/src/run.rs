@@ -72,6 +72,14 @@ fn event_loop(
                 if app.handle_key(&key) == Control::Quit {
                     return Ok(());
                 }
+                // Cloud fetch/save blocks on the network; draw the busy message
+                // first so the wait is visible, then run the deferred work.
+                if app.is_busy() {
+                    terminal
+                        .draw(|frame| ui::render(frame, &app))
+                        .map_err(terminal_error)?;
+                    app.run_pending();
+                }
             }
             // Ratatui re-reads the size during the next draw, so a resize just
             // needs the loop to redraw.

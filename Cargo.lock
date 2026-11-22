@@ -1639,14 +1639,17 @@ name = "kpd-tui"
 version = "0.1.0"
 dependencies = [
  "crossterm",
+ "keepass",
  "kpd-clipboard",
  "kpd-core",
  "kpd-crypto",
  "kpd-kdbx",
  "kpd-plugin-runtime",
+ "kpd-storage",
  "ratatui",
  "secrecy",
  "thiserror 2.0.21",
+ "tokio",
  "uuid",
 ]
 

@@ -24,6 +24,7 @@ mod ui;
 use std::path::PathBuf;
 use std::time::Duration;
 
+pub use kpd_storage::BackendSpec;
 pub use run::run;
 
 /// Errors surfaced while running the interactive UI.
@@ -37,22 +38,69 @@ pub enum TuiError {
     Clipboard(#[from] kpd_clipboard::ClipboardError),
 }
 
+/// Where the database lives: a local file, or a cloud backend addressed by a
+/// [`BackendSpec`].
+///
+/// Cloud locations are opened and saved through [`kpd_storage::Storage`], so
+/// the TUI works the same way against a local file, WebDAV, or Dropbox. The
+/// cloud path fetches the encrypted bytes on unlock and uploads the re-encrypted
+/// bytes on save, using the remote revision for optimistic concurrency.
+#[derive(Debug, Clone)]
+pub enum DbLocation {
+    Local(PathBuf),
+    Cloud(BackendSpec),
+}
+
+impl DbLocation {
+    /// Human-readable location for the unlock screen and status bar.
+    pub fn label(&self) -> String {
+        match self {
+            Self::Local(path) => path.display().to_string(),
+            Self::Cloud(BackendSpec::Local { path }) => path.display().to_string(),
+            Self::Cloud(BackendSpec::WebDav { url, .. }) => url.clone(),
+            Self::Cloud(BackendSpec::Dropbox { path, .. }) => format!("dropbox:{path}"),
+        }
+    }
+
+    /// Whether saving goes through a [`Storage`](kpd_storage::Storage) backend
+    /// instead of the local-file save path.
+    pub fn is_cloud(&self) -> bool {
+        matches!(self, Self::Cloud(_))
+    }
+}
+
 /// Configuration for one `kpd-tui` run.
 #[derive(Debug, Clone)]
 pub struct AppConfig {
-    pub db_path: PathBuf,
+    pub location: DbLocation,
     pub key_file: Option<PathBuf>,
     /// Clipboard auto-clear timeout for copied secrets.
     pub clipboard_timeout: Duration,
 }
 
 impl AppConfig {
-    /// Defaults: no key file, 30-second clipboard timeout.
+    /// Defaults: a local database, no key file, 30-second clipboard timeout.
     pub fn new(db_path: impl Into<PathBuf>) -> Self {
         Self {
-            db_path: db_path.into(),
+            location: DbLocation::Local(db_path.into()),
             key_file: None,
             clipboard_timeout: Duration::from_secs(30),
         }
+    }
+
+    /// The same defaults, but the database is opened from and saved to a cloud
+    /// backend described by `spec`.
+    pub fn cloud(spec: BackendSpec) -> Self {
+        Self {
+            location: DbLocation::Cloud(spec),
+            key_file: None,
+            clipboard_timeout: Duration::from_secs(30),
+        }
+    }
+
+    /// Attach a key file to the database key.
+    pub fn with_key_file(mut self, key_file: impl Into<PathBuf>) -> Self {
+        self.key_file = Some(key_file.into());
+        self
     }
 }

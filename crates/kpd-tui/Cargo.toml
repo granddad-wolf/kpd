@@ -20,10 +20,18 @@ kpd-kdbx = { path = "../kpd-kdbx" }
 kpd-crypto = { path = "../kpd-crypto" }
 kpd-clipboard = { path = "../kpd-clipboard" }
 kpd-plugin-runtime = { path = "../kpd-plugin-runtime" }
+kpd-storage = { path = "../kpd-storage" }
 # Direct deps only to name `SecretString`/`ExposeSecret` and `Uuid` in our
 # signatures; versions match kpd-core so they unify in the dependency graph.
 secrecy = "0.10"
+# Blocking bridge to the async cloud backends (fetch on unlock, upload on save).
+tokio = { version = "1", features = ["rt-multi-thread"] }
 uuid = "1"
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+# Tests seed a real KDBX file so the cloud unlock/save path is exercised with
+# the same keepass writer the runtime uses.
+keepass = { version = "0.17", features = ["save_kdbx4"] }
