@@ -5,6 +5,20 @@ use reqwest::{Client, Method, RequestBuilder, Response, StatusCode};
 
 use crate::{Meta, Storage, StorageError};
 
+/// Body of the exclusive write lock taken around a save.
+const LOCK_BODY: &str = concat!(
+    r#"<?xml version="1.0" encoding="utf-8"?>"#,
+    r#"<D:lockinfo xmlns:D="DAV:">"#,
+    r#"<D:lockscope><D:exclusive/></D:lockscope>"#,
+    r#"<D:locktype><D:write/></D:locktype>"#,
+    r#"<D:owner><D:href>kpd</D:href></D:owner>"#,
+    r#"</D:lockinfo>"#,
+);
+
+/// How long a save keeps its write lock; the server drops it automatically if
+/// the client disappears before the matching `UNLOCK`.
+const LOCK_TIMEOUT: &str = "Second-60";
+
 /// A database stored on a WebDAV server.
 ///
 /// `url` is the full URL of the `.kdbx` file. Credentials, when both are
@@ -90,13 +104,11 @@ impl Storage for WebDavStorage {
         data: &[u8],
         expected_revision: Option<&str>,
     ) -> Result<Meta, StorageError> {
-        // `If-Match` uses strong comparison (RFC 9110 §13.1.1), so a weak `ETag`
-        // can never match — plain Apache `mod_dav` emits weak `ETag`s
-        // (`W/"size-mtime"`), which made every conditional save fail with 412.
-        // For those servers, verify the revision with a HEAD first and then
-        // write unconditionally: not atomic, but a concurrent change is still
-        // caught rather than failing every save or overwriting silently.
-        if let Some(expected) = expected_revision.filter(|value| is_weak_etag(value)) {
+        // Compare the revision *before* locking: some servers (Nextcloud)
+        // change the `ETag` when a lock is acquired, so comparing under the
+        // lock would report a spurious conflict. This check is also what
+        // catches changes on servers that ignore `If-Match` (rclone).
+        if let Some(expected) = expected_revision {
             let current = self.meta().await?;
             if !etag_matches(current.revision.as_deref(), expected) {
                 return Err(StorageError::Conflict(format!(
@@ -106,19 +118,18 @@ impl Storage for WebDavStorage {
             }
         }
 
-        let mut request = self.request(Method::PUT);
-        if let Some(value) = if_match_value(strong_revision(expected_revision)) {
-            request = request.header(IF_MATCH, value);
+        // Hold an exclusive WebDAV lock for the PUT so no conforming writer can
+        // change the resource between the check above and the write. Servers
+        // without lock support fall back to preconditions below.
+        let lock = self.lock_exclusive().await?;
+        let result = self
+            .write_locked(data, expected_revision, lock.as_deref())
+            .await;
+        if let Some(token) = &lock {
+            // Best effort: the lock expires by itself if this fails.
+            let _ = self.unlock(token).await;
         }
-        let response = request
-            .body(data.to_vec())
-            .send()
-            .await
-            .map_err(http_error)?;
-        let response = ensure_success(response)?;
-        Ok(Meta {
-            revision: etag_from_headers(response.headers()),
-        })
+        result
     }
 
     async fn exists(&self) -> Result<bool, StorageError> {
@@ -137,6 +148,95 @@ impl Storage for WebDavStorage {
     async fn meta(&self) -> Result<Meta, StorageError> {
         let response = self
             .request(Method::HEAD)
+            .send()
+            .await
+            .map_err(http_error)?;
+        let response = ensure_success(response)?;
+        Ok(Meta {
+            revision: etag_from_headers(response.headers()),
+        })
+    }
+}
+
+impl WebDavStorage {
+    /// Acquire an exclusive write lock on the database.
+    ///
+    /// Returns `Ok(None)` when the server does not support locking (501/405),
+    /// forbids it (403), or cannot lock this resource (404/409); the caller then
+    /// saves with revision preconditions only. A resource already locked by
+    /// another client is a [`StorageError::Conflict`].
+    async fn lock_exclusive(&self) -> Result<Option<String>, StorageError> {
+        let method = Method::from_bytes(b"LOCK")
+            .map_err(|err| StorageError::Config(format!("invalid LOCK method: {err}")))?;
+        let response = self
+            .request(method)
+            .header("Depth", "0")
+            .header("Timeout", LOCK_TIMEOUT)
+            .header(
+                reqwest::header::CONTENT_TYPE,
+                "application/xml; charset=utf-8",
+            )
+            .body(LOCK_BODY)
+            .send()
+            .await
+            .map_err(http_error)?;
+
+        match response.status() {
+            status if status.is_success() => {
+                let headers = response.headers().clone();
+                let body = response.text().await.map_err(http_error)?;
+                Ok(lock_token(&headers, &body))
+            }
+            StatusCode::LOCKED => Err(StorageError::Conflict(
+                "the remote database is locked by another client".to_string(),
+            )),
+            StatusCode::NOT_IMPLEMENTED
+            | StatusCode::METHOD_NOT_ALLOWED
+            | StatusCode::FORBIDDEN
+            | StatusCode::NOT_FOUND
+            | StatusCode::CONFLICT => Ok(None),
+            status => Err(http_status_error(status)),
+        }
+    }
+
+    /// Release the write lock taken by [`Self::lock_exclusive`].
+    async fn unlock(&self, token: &str) -> Result<(), StorageError> {
+        let method = Method::from_bytes(b"UNLOCK")
+            .map_err(|err| StorageError::Config(format!("invalid UNLOCK method: {err}")))?;
+        let response = self
+            .request(method)
+            .header("Lock-Token", token)
+            .send()
+            .await
+            .map_err(http_error)?;
+        ensure_success(response)?;
+        Ok(())
+    }
+
+    /// The locked part of [`Storage::write`]: the `PUT`, authorized by the lock
+    /// token when one was acquired.
+    ///
+    /// Without a lock, a strong revision is still sent as `If-Match` so servers
+    /// that support preconditions keep rejecting concurrent changes; weak
+    /// `ETag`s cannot be used there and rely on the pre-lock HEAD check alone.
+    async fn write_locked(
+        &self,
+        data: &[u8],
+        expected_revision: Option<&str>,
+        lock: Option<&str>,
+    ) -> Result<Meta, StorageError> {
+        let mut request = self.request(Method::PUT);
+        if let Some(token) = lock {
+            // The lock token authorizes this write; a locked resource answers
+            // 423 to writers that do not present it. `If-Match` is deliberately
+            // not sent: some servers (Nextcloud) change the ETag on lock, and
+            // the pre-lock HEAD check already covered revision drift.
+            request = request.header("If", format!("({token})"));
+        } else if let Some(value) = if_match_value(strong_revision(expected_revision)) {
+            request = request.header(IF_MATCH, value);
+        }
+        let response = request
+            .body(data.to_vec())
             .send()
             .await
             .map_err(http_error)?;
@@ -178,6 +278,31 @@ fn strong_revision(revision: Option<&str>) -> Option<&str> {
     revision.filter(|value| !is_weak_etag(value))
 }
 
+/// The lock token from a LOCK response, normalized to `<token>` (the syntax
+/// both the `If` and `Lock-Token` request headers expect).
+///
+/// Most servers put it in the `Lock-Token` response header; the body's
+/// `locktoken`/`href` pair is the fallback.
+fn lock_token(headers: &HeaderMap, body: &str) -> Option<String> {
+    let header = headers
+        .get("lock-token")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let token = header.or_else(|| lock_token_from_body(body))?;
+    let token = token.trim().trim_start_matches('<').trim_end_matches('>');
+    (!token.is_empty()).then(|| format!("<{token}>"))
+}
+
+/// Extract the `locktoken` `href` value from a LOCK response body.
+fn lock_token_from_body(body: &str) -> Option<String> {
+    let lower = body.to_ascii_lowercase();
+    let lock_key = lower.find("locktoken")?;
+    let href_key = lower[lock_key..].find("href")? + lock_key;
+    let open = body[href_key..].find('>')? + href_key + 1;
+    let close = body[open..].find('<')? + open;
+    Some(body[open..close].to_string())
+}
+
 /// Map a non-success HTTP status onto a typed storage error when it is one we
 /// distinguish: `412` → [`StorageError::Conflict`], `404` →
 /// [`StorageError::NotFound`]. Returns `None` for statuses the caller should
@@ -190,6 +315,10 @@ fn status_to_error(status: StatusCode) -> Option<StorageError> {
     } else if status == StatusCode::NOT_FOUND {
         Some(StorageError::NotFound(
             "remote file not found (HTTP 404)".to_string(),
+        ))
+    } else if status == StatusCode::LOCKED {
+        Some(StorageError::Conflict(
+            "the remote database is locked by another client".to_string(),
         ))
     } else {
         None
@@ -228,7 +357,7 @@ fn ensure_success(response: Response) -> Result<Response, StorageError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        etag_from_headers, etag_matches, if_match_value, is_weak_etag, status_to_error,
+        etag_from_headers, etag_matches, if_match_value, is_weak_etag, lock_token, status_to_error,
         strong_revision, WebDavStorage,
     };
     use crate::{Storage, StorageError};
@@ -245,6 +374,36 @@ mod tests {
         assert_eq!(strong_revision(Some("W/\"abc\"")), None);
         assert_eq!(strong_revision(Some("\"abc\"")), Some("\"abc\""));
         assert_eq!(strong_revision(None), None);
+    }
+
+    #[test]
+    fn lock_token_prefers_the_header_and_normalizes_brackets() {
+        let mut headers = HeaderMap::new();
+        headers.insert("lock-token", "<opaquelocktoken:abc>".parse().unwrap());
+        assert_eq!(
+            lock_token(&headers, ""),
+            Some("<opaquelocktoken:abc>".to_string())
+        );
+
+        // Header without brackets is normalized too.
+        let mut headers = HeaderMap::new();
+        headers.insert("lock-token", "opaquelocktoken:def".parse().unwrap());
+        assert_eq!(
+            lock_token(&headers, ""),
+            Some("<opaquelocktoken:def>".to_string())
+        );
+    }
+
+    #[test]
+    fn lock_token_falls_back_to_the_response_body() {
+        let body = "<?xml version=\"1.0\"?><d:prop><d:lockdiscovery>\
+                    <d:activelock><d:locktoken><d:href>opaquelocktoken:abc</d:href>\
+                    </d:locktoken></d:activelock></d:lockdiscovery></d:prop>";
+        assert_eq!(
+            lock_token(&HeaderMap::new(), body),
+            Some("<opaquelocktoken:abc>".to_string())
+        );
+        assert_eq!(lock_token(&HeaderMap::new(), "<no token here/>"), None);
     }
 
     #[test]
