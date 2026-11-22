@@ -119,6 +119,28 @@ impl DbHandle {
         import::convert(&self.inner)
     }
 
+    /// The database file-format version, e.g. `"KDBX4.0"` or `"KDBX4.1"`.
+    pub fn version(&self) -> String {
+        self.inner.config.version.to_string()
+    }
+
+    /// Whether the in-memory database is KDBX 4.1 — the only format the writer
+    /// produces. KDBX 4.0 (and older) databases read fine but must be upgraded
+    /// before they can be saved.
+    pub fn is_kdbx41(&self) -> bool {
+        matches!(
+            self.inner.config.version,
+            keepass::config::DatabaseVersion::KDB4(1)
+        )
+    }
+
+    /// Upgrade the in-memory database to KDBX 4.1 so it can be saved. Cipher and
+    /// KDF settings are preserved; only the file-format version changes. The
+    /// original file is preserved by the `.bak` backup on save.
+    pub fn upgrade_to_kdbx41(&mut self) {
+        self.inner.config.version = keepass::config::DatabaseVersion::KDB4(1);
+    }
+
     /// Guarded save per the ADR-0005 recipe.
     ///
     /// # Errors
@@ -474,8 +496,7 @@ mod tests {
     fn sample_db() -> KpDatabase {
         let mut db = KpDatabase::new();
         {
-            let mut root = db.root_mut();
-            let mut entry = root.add_entry();
+            let mut entry = db.root_mut().add_entry();
             entry.set_unprotected(fields::TITLE, "Example");
             entry.set_unprotected(fields::USERNAME, "alice");
             entry.set_protected(fields::PASSWORD, "hunter2");
