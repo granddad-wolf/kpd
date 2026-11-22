@@ -496,7 +496,8 @@ mod tests {
     fn sample_db() -> KpDatabase {
         let mut db = KpDatabase::new();
         {
-            let mut entry = db.root_mut().add_entry();
+            let mut root = db.root_mut();
+            let mut entry = root.add_entry();
             entry.set_unprotected(fields::TITLE, "Example");
             entry.set_unprotected(fields::USERNAME, "alice");
             entry.set_protected(fields::PASSWORD, "hunter2");
