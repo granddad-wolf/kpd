@@ -1643,6 +1643,7 @@ dependencies = [
  "kpd-core",
  "kpd-crypto",
  "kpd-kdbx",
+ "kpd-plugin-runtime",
  "ratatui",
  "secrecy",
  "thiserror 2.0.21",

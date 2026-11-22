@@ -65,6 +65,13 @@ pub enum DetailValue {
     Secret(SecretString),
 }
 
+/// An open plugin picker: discovered `.wasm` paths and the highlighted index.
+#[derive(Debug, Clone)]
+pub struct PluginMenu {
+    pub paths: Vec<std::path::PathBuf>,
+    pub index: usize,
+}
+
 /// An in-progress create/edit/delete/save prompt.
 ///
 /// `None` means no prompt is active. The text prompts drive the `input` buffer
@@ -94,6 +101,10 @@ pub enum Prompt {
         group_uuid: Uuid,
     },
     ConfirmSave,
+    /// Typing a command line for `wasm` (chosen in the plugin picker).
+    PluginCommand {
+        wasm: std::path::PathBuf,
+    },
 }
 
 /// Progress of the multi-step add-entry flow after one `Enter` commit.
@@ -136,6 +147,10 @@ pub struct State {
     pub input: String,
     /// Whether `input` is a secret and must be rendered masked.
     pub masked_input: bool,
+    /// An open plugin picker, if any.
+    pub plugin_menu: Option<PluginMenu>,
+    /// Plugin output shown in a modal, if any.
+    pub plugin_result: Option<String>,
 }
 
 impl Default for State {
@@ -154,6 +169,8 @@ impl Default for State {
             prompt: Prompt::None,
             input: String::new(),
             masked_input: false,
+            plugin_menu: None,
+            plugin_result: None,
         }
     }
 }
@@ -471,6 +488,57 @@ impl State {
         self.prompt = Prompt::None;
         self.input.clear();
         self.masked_input = false;
+    }
+
+    /// Open the plugin picker with the discovered plugin paths.
+    pub fn open_plugin_menu(&mut self, paths: Vec<std::path::PathBuf>) {
+        self.plugin_menu = Some(PluginMenu { paths, index: 0 });
+    }
+
+    /// Close the plugin picker without choosing a plugin.
+    pub fn close_plugin_menu(&mut self) {
+        self.plugin_menu = None;
+    }
+
+    /// Move the highlight in the plugin picker (clamped to its bounds).
+    pub fn plugin_menu_navigate(&mut self, direction: Move) {
+        let Some(menu) = self.plugin_menu.as_mut() else {
+            return;
+        };
+        if menu.paths.is_empty() {
+            return;
+        }
+        menu.index = match direction {
+            Move::Up => menu.index.saturating_sub(1),
+            Move::Down => (menu.index + 1).min(menu.paths.len() - 1),
+        };
+    }
+
+    /// The highlighted plugin path, if the picker is open.
+    pub fn plugin_menu_selected(&self) -> Option<&std::path::PathBuf> {
+        let menu = self.plugin_menu.as_ref()?;
+        menu.paths.get(menu.index)
+    }
+
+    /// Close the picker and begin typing a command line for `wasm`.
+    pub fn begin_plugin_command(&mut self, wasm: std::path::PathBuf) {
+        self.plugin_menu = None;
+        self.input.clear();
+        self.masked_input = false;
+        self.prompt = Prompt::PluginCommand { wasm };
+    }
+
+    /// Show a plugin's output in a modal and clear the prompt.
+    pub fn set_plugin_result(&mut self, text: String) {
+        self.plugin_result = Some(text);
+        self.prompt = Prompt::None;
+        self.input.clear();
+        self.masked_input = false;
+    }
+
+    /// Dismiss the plugin-output modal.
+    pub fn dismiss_plugin_result(&mut self) {
+        self.plugin_result = None;
     }
 
     /// The editable [`EntryField`] for the currently focused detail row, if the

@@ -30,6 +30,12 @@ pub fn render(frame: &mut Frame, app: &App) {
         Screen::Browse => render_browse(frame, app),
         Screen::Detail => render_detail(frame, app),
     }
+    if app.state.plugin_menu.is_some() {
+        render_plugin_menu(frame, app);
+    }
+    if let Some(result) = &app.state.plugin_result {
+        render_plugin_result(frame, result);
+    }
 }
 
 fn render_unlock(frame: &mut Frame, app: &App) {
@@ -267,6 +273,7 @@ fn prompt_label_and_hint(prompt: &Prompt) -> (&'static str, &'static str) {
             "y = delete · any other key = cancel",
         ),
         Prompt::ConfirmSave => ("Save database? (y/N):", "y = save · any other key = cancel"),
+        Prompt::PluginCommand { .. } => ("Plugin command:", "Enter = run · Esc = cancel"),
     }
 }
 
@@ -298,7 +305,7 @@ fn render_status(frame: &mut Frame, app: &App, area: Rect) {
     ];
 
     let hint = match app.status() {
-        Status::Idle => "Q quit · L lock · Ctrl+F search · Ctrl+C copy".to_string(),
+        Status::Idle => "Q quit · L lock · Ctrl+F search · Ctrl+C copy · P plugins".to_string(),
         Status::Info(info) => info.clone(),
         Status::Copy { copied_at, timeout } => {
             let remaining = timeout.saturating_sub(copied_at.elapsed());
@@ -309,6 +316,47 @@ fn render_status(frame: &mut Frame, app: &App, area: Rect) {
     spans.push(Span::styled(hint, Style::default().fg(Color::DarkGray)));
 
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// Render the plugin picker as a centered overlay.
+fn render_plugin_menu(frame: &mut Frame, app: &App) {
+    let Some(menu) = &app.state.plugin_menu else {
+        return;
+    };
+    let items: Vec<ListItem> = menu
+        .paths
+        .iter()
+        .map(|path| {
+            let name = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or("?");
+            ListItem::new(name.to_string())
+        })
+        .collect();
+
+    let height = (items.len() as u16 + 2).min(frame.area().height).max(3);
+    let area = centered(frame.area(), 60, height);
+    let list = List::new(items)
+        .block(Block::bordered().title("Plugins — Enter run · Esc close"))
+        .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+    let mut state = ListState::default();
+    state.select(Some(menu.index));
+    frame.render_stateful_widget(list, area, &mut state);
+}
+
+/// Render a plugin's output in a centered modal (dismissed by any key).
+fn render_plugin_result(frame: &mut Frame, result: &str) {
+    let lines: Vec<Line> = result
+        .lines()
+        .map(|line| Line::from(line.to_string()))
+        .collect();
+    let height = (lines.len() as u16 + 2).min(frame.area().height).max(3);
+    let width = frame.area().width.min(72);
+    let area = centered(frame.area(), width, height);
+    let paragraph =
+        Paragraph::new(lines).block(Block::bordered().title("Plugin result — any key to close"));
+    frame.render_widget(paragraph, area);
 }
 
 /// A rectangle centered within `area`, clamped to the available size.

@@ -107,6 +107,15 @@ impl App {
 
     /// Handle one key press, returning whether the app should quit.
     pub fn handle_key(&mut self, key: &KeyEvent) -> Control {
+        // A plugin-output modal captures the keyboard until dismissed.
+        if self.state.plugin_result.is_some() {
+            self.state.dismiss_plugin_result();
+            return Control::Continue;
+        }
+        // A plugin picker captures the keyboard until it closes.
+        if self.state.plugin_menu.is_some() {
+            return self.handle_plugin_menu_key(key);
+        }
         // A prompt captures the keyboard until committed or cancelled.
         if self.state.prompt != Prompt::None {
             return self.handle_prompt_key(key);
@@ -116,6 +125,31 @@ impl App {
             Screen::Unlock => self.handle_unlock_key(key),
             Screen::Browse => self.handle_browse_key(key),
             Screen::Detail => self.handle_detail_key(key),
+        }
+    }
+
+    /// Handle a key while the plugin picker is open.
+    fn handle_plugin_menu_key(&mut self, key: &KeyEvent) -> Control {
+        match key.code {
+            KeyCode::Esc => {
+                self.state.close_plugin_menu();
+                Control::Continue
+            }
+            KeyCode::Up => {
+                self.state.plugin_menu_navigate(Move::Up);
+                Control::Continue
+            }
+            KeyCode::Down => {
+                self.state.plugin_menu_navigate(Move::Down);
+                Control::Continue
+            }
+            KeyCode::Enter => {
+                if let Some(wasm) = self.state.plugin_menu_selected().cloned() {
+                    self.state.begin_plugin_command(wasm);
+                }
+                Control::Continue
+            }
+            _ => Control::Continue,
         }
     }
 
@@ -213,6 +247,10 @@ impl App {
             }
             KeyCode::Char('x') | KeyCode::Char('X') if !ctrl => {
                 self.begin_delete_current_group();
+                Control::Continue
+            }
+            KeyCode::Char('p') | KeyCode::Char('P') if !ctrl => {
+                self.open_plugin_menu();
                 Control::Continue
             }
             KeyCode::Up => {
@@ -476,6 +514,10 @@ impl App {
                 );
             }
             Prompt::ConfirmSave => self.save(),
+            Prompt::PluginCommand { wasm } => {
+                let command_line = std::mem::take(&mut self.state.input);
+                self.run_plugin(&wasm, &command_line);
+            }
             Prompt::AddEntryTitle
             | Prompt::AddEntryUsername { .. }
             | Prompt::AddEntryPassword { .. } => {
@@ -515,6 +557,79 @@ impl App {
             }
             None => {
                 self.status = Status::Info("not unlocked".to_string());
+            }
+        }
+    }
+
+    /// Open the plugin picker with every `.wasm` discovered in the plugin dirs.
+    fn open_plugin_menu(&mut self) {
+        let paths = discover_plugins();
+        if paths.is_empty() {
+            self.status = Status::Info(format!("no plugins found in {}", plugins_dir_hint()));
+            return;
+        }
+        self.state.open_plugin_menu(paths);
+    }
+
+    /// Run the selected plugin against the open database's entries and show its
+    /// output in a modal.
+    fn run_plugin(&mut self, wasm: &std::path::Path, command_line: &str) {
+        use kpd_plugin_runtime::{EntrySummary, Limits, Permission, PluginRuntime, RunContext};
+
+        let mut parts = command_line.split_whitespace();
+        let Some(command) = parts.next() else {
+            self.state.cancel_prompt();
+            self.status = Status::Info("type a plugin command (e.g. count)".to_string());
+            return;
+        };
+        let args: Vec<String> = parts.map(str::to_string).collect();
+
+        let entries = match &self.state.db {
+            Some(db) => db
+                .all_entries()
+                .into_iter()
+                .filter_map(|entry_ref| {
+                    db.entry(entry_ref.entry_uuid).map(|entry| EntrySummary {
+                        uuid: entry.uuid.to_string(),
+                        title: entry.title.clone(),
+                        username: entry.username.clone(),
+                    })
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+
+        let runtime = PluginRuntime::new();
+        let permissions = [Permission::EntriesRead, Permission::ClipboardWrite];
+        let mut plugin = match runtime.load(wasm, &permissions, Limits::default()) {
+            Ok(plugin) => plugin,
+            Err(err) => {
+                self.state.cancel_prompt();
+                self.status = Status::Info(format!("load plugin failed: {err}"));
+                return;
+            }
+        };
+
+        let mut ctx = RunContext {
+            entries,
+            ..Default::default()
+        };
+        match plugin.run(command, &args, &mut ctx) {
+            Ok(output) => {
+                let mut text = output;
+                for line in &ctx.logs {
+                    text.push_str("\nlog: ");
+                    text.push_str(line);
+                }
+                for copied in &ctx.copied {
+                    text.push_str("\ncopied: ");
+                    text.push_str(copied);
+                }
+                self.state.set_plugin_result(text);
+            }
+            Err(err) => {
+                self.state.cancel_prompt();
+                self.status = Status::Info(format!("plugin failed: {err}"));
             }
         }
     }
@@ -595,4 +710,35 @@ impl App {
         self.unlock = UnlockInput::default();
         self.unlock_error = None;
     }
+}
+
+/// The user plugin directory (`$HOME/.config/kpd/plugins`).
+fn plugins_dir() -> std::path::PathBuf {
+    match std::env::var("HOME") {
+        Ok(home) => std::path::PathBuf::from(home).join(".config/kpd/plugins"),
+        Err(_) => std::path::PathBuf::from("plugins"),
+    }
+}
+
+fn plugins_dir_hint() -> String {
+    format!("{} or ./plugins", plugins_dir().display())
+}
+
+/// Every `.wasm` in `./plugins` and the user plugin dir (sorted, deduped).
+fn discover_plugins() -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    for dir in [std::path::PathBuf::from("plugins"), plugins_dir()] {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) == Some("wasm") {
+                out.push(path);
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
 }
