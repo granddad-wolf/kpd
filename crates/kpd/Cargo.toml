@@ -4,7 +4,6 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-repository.workspace = true
 authors.workspace = true
 description = "KeePass-compatible TUI password manager (binary)."
 
@@ -15,8 +14,8 @@ path = "src/main.rs"
 [dependencies]
 kpd-tui = { path = "../kpd-tui" }
 kpd-storage = { path = "../kpd-storage" }
+kpd-kdbx = { path = "../kpd-kdbx" }
+kpd-crypto = { path = "../kpd-crypto" }
+kpd-plugin-runtime = { path = "../kpd-plugin-runtime" }
 # Runtime for the async cloud fetch/push subcommands.
 tokio = { version = "1", features = ["rt-multi-thread"] }
-
-[lints]
-workspace = true

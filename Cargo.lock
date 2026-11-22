@@ -1559,6 +1559,9 @@ dependencies = [
 name = "kpd"
 version = "0.1.0"
 dependencies = [
+ "kpd-crypto",
+ "kpd-kdbx",
+ "kpd-plugin-runtime",
  "kpd-storage",
  "kpd-tui",
  "tokio",

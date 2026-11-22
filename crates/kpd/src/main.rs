@@ -1,12 +1,15 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use kpd_crypto::CompositeKey;
+use kpd_plugin_runtime::{EntrySummary, Limits, Permission, PluginRuntime, RunContext};
 use kpd_storage::{from_spec, BackendSpec, Storage};
 use kpd_tui::{run, AppConfig};
 
 enum Action {
     Run(AppConfig),
     Cloud(CloudCommand),
+    Plugin(PluginCommand),
     Version,
     Help,
 }
@@ -22,6 +25,14 @@ enum CloudCommand {
     },
 }
 
+struct PluginCommand {
+    wasm: PathBuf,
+    command: String,
+    args: Vec<String>,
+    db: Option<PathBuf>,
+    password_env: String,
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match parse(&args) {
@@ -33,6 +44,12 @@ fn main() {
         }
         Ok(Action::Cloud(command)) => {
             if let Err(err) = run_cloud(command) {
+                eprintln!("error: {err}");
+                std::process::exit(1);
+            }
+        }
+        Ok(Action::Plugin(command)) => {
+            if let Err(err) = run_plugin(command) {
                 eprintln!("error: {err}");
                 std::process::exit(1);
             }
@@ -56,6 +73,7 @@ fn parse(args: &[String]) -> Result<Action, String> {
         "--help" | "-h" => Ok(Action::Help),
         "open" => parse_open(&args[1..]),
         "cloud" => parse_cloud(&args[1..]),
+        "plugin" => parse_plugin(&args[1..]),
         other => Err(format!("unknown command or flag: {other}")),
     }
 }
@@ -180,6 +198,102 @@ fn run_cloud(command: CloudCommand) -> Result<(), String> {
     })
 }
 
+fn parse_plugin(args: &[String]) -> Result<Action, String> {
+    let mut db = None;
+    let mut password_env = "KPD_DB_PASSWORD".to_string();
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--db" => {
+                i += 1;
+                let value = args
+                    .get(i)
+                    .ok_or_else(|| "--db requires a path".to_string())?;
+                db = Some(PathBuf::from(value));
+            }
+            "--password-env" => {
+                i += 1;
+                let value = args
+                    .get(i)
+                    .ok_or_else(|| "--password-env requires a variable name".to_string())?;
+                password_env = value.clone();
+            }
+            _ => break,
+        }
+        i += 1;
+    }
+
+    let rest = &args[i..];
+    if rest.len() < 2 {
+        return Err(
+            "usage: kpd plugin [--db <path>] [--password-env <VAR>] <wasm> <command> [args...]"
+                .to_string(),
+        );
+    }
+
+    Ok(Action::Plugin(PluginCommand {
+        wasm: PathBuf::from(&rest[0]),
+        command: rest[1].clone(),
+        args: rest[2..].to_vec(),
+        db,
+        password_env,
+    }))
+}
+
+/// Run a plugin against the (optional) database entry list.
+///
+/// With `--db`, the master password is read from the environment variable named
+/// by `--password-env` (default `KPD_DB_PASSWORD`) so it never appears on argv.
+fn run_plugin(command: PluginCommand) -> Result<(), String> {
+    let entries = match &command.db {
+        Some(db_path) => {
+            let password = std::env::var(&command.password_env).map_err(|_| {
+                format!(
+                    "set {} to the database master password (or omit --db to run without entries)",
+                    command.password_env
+                )
+            })?;
+            let key = CompositeKey::new().with_password(password);
+            let db = kpd_kdbx::open(db_path, &key).map_err(|err| err.to_string())?;
+            db.all_entries()
+                .into_iter()
+                .filter_map(|entry_ref| {
+                    db.entry(entry_ref.entry_uuid).map(|entry| EntrySummary {
+                        uuid: entry.uuid.to_string(),
+                        title: entry.title.clone(),
+                        username: entry.username.clone(),
+                    })
+                })
+                .collect()
+        }
+        None => Vec::new(),
+    };
+
+    let runtime = PluginRuntime::new();
+    let permissions = [Permission::EntriesRead, Permission::ClipboardWrite];
+    let mut plugin = runtime
+        .load(&command.wasm, &permissions, Limits::default())
+        .map_err(|err| format!("load plugin: {err}"))?;
+
+    let mut ctx = RunContext {
+        entries,
+        ..Default::default()
+    };
+    let result = plugin
+        .run(&command.command, &command.args, &mut ctx)
+        .map_err(|err| format!("run plugin: {err}"))?;
+
+    println!("{result}");
+    for line in &ctx.logs {
+        eprintln!("log: {line}");
+    }
+    for text in &ctx.copied {
+        eprintln!("copied: {text}");
+    }
+    Ok(())
+}
+
 fn print_help() {
     println!(
         "kpd {} — KeePass-compatible TUI password manager\n\n\
@@ -187,6 +301,7 @@ fn print_help() {
          \x20   kpd open <path> [--keyfile <path>] [--timeout <secs>]\n\
          \x20   kpd cloud fetch <webdav|dropbox> <url|path> <out>\n\
          \x20   kpd cloud push <webdav|dropbox> <url|path> <from>\n\
+         \x20   kpd plugin [--db <path>] [--password-env <VAR>] <wasm> <command> [args...]\n\
          \x20   kpd --version\n\
          \x20   kpd --help\n\n\
          OPTIONS (open):\n\
@@ -195,6 +310,8 @@ fn print_help() {
          CLOUD ENV VARS (secrets are read from the environment, never argv):\n\
          \x20   KPD_WEBDAV_USER / KPD_WEBDAV_PASS   WebDAV basic-auth credentials\n\
          \x20   KPD_DROPBOX_TOKEN                    Dropbox OAuth2 access token\n\n\
+         PLUGIN ENV VARS:\n\
+         \x20   KPD_DB_PASSWORD   Master password for `plugin --db` (default variable)\n\n\
          FLAGS:\n\
          \x20   -V, --version   Print version\n\
          \x20   -h, --help      Print help",
@@ -240,5 +357,20 @@ mod tests {
             .map(|s| s.to_string())
             .collect();
         assert!(matches!(parse(&args), Ok(Action::Run(_))));
+    }
+
+    #[test]
+    fn plugin_parses_into_plugin_action() {
+        let args: Vec<String> = ["plugin", "p.wasm", "count"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(matches!(parse(&args), Ok(Action::Plugin(_))));
+    }
+
+    #[test]
+    fn plugin_requires_wasm_and_command() {
+        let args: Vec<String> = ["plugin", "p.wasm"].iter().map(|s| s.to_string()).collect();
+        assert!(parse(&args).is_err());
     }
 }
