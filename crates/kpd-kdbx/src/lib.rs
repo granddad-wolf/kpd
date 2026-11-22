@@ -32,6 +32,10 @@ pub enum KdbxError {
     Parse(String),
     #[error("this database format cannot be written (only KDBX 4.1 is supported for saving)")]
     UnsupportedForWrite,
+    #[error(
+        "this database was opened from memory and is not backed by a file; serialize it instead"
+    )]
+    NotFileBacked,
     #[error("the root group cannot be deleted")]
     CannotDeleteRoot,
 }
@@ -89,7 +93,10 @@ vendor-extension XML fields (e.g. KeePassXC <PreviousParentGroup>) may be droppe
 /// A handle that owns the decrypted `keepass::Database` for the write path.
 pub struct DbHandle {
     inner: KpDatabase,
-    path: PathBuf,
+    /// The file the database was opened from, for the guarded file save.
+    /// `None` for a handle created by [`DbHandle::open_bytes`], which is
+    /// serialized by the caller (e.g. to upload it to cloud storage).
+    path: Option<PathBuf>,
 }
 
 impl DbHandle {
@@ -110,8 +117,35 @@ impl DbHandle {
 
         Ok(DbHandle {
             inner: db,
-            path: path.to_path_buf(),
+            path: Some(path.to_path_buf()),
         })
+    }
+
+    /// Open and decrypt a KDBX database from memory.
+    ///
+    /// The handle is not backed by a file: [`DbHandle::save`] returns
+    /// [`KdbxError::NotFileBacked`], and the caller is expected to push
+    /// [`DbHandle::serialize`] output wherever it came from (e.g. cloud
+    /// storage). This is what the TUI uses for remote databases.
+    ///
+    /// # Errors
+    ///
+    /// Mirrors [`DbHandle::open`] except that there is no [`KdbxError::NotFound`]
+    /// case: [`KdbxError::WrongCredentials`] when the key does not decrypt the
+    /// bytes, and [`KdbxError::Parse`] for corrupt or unsupported data.
+    pub fn open_bytes(bytes: &[u8], key: &CompositeKey) -> Result<Self, KdbxError> {
+        let db = KpDatabase::open(&mut Cursor::new(bytes), build_database_key(key)?)
+            .map_err(map_open_error)?;
+
+        Ok(DbHandle {
+            inner: db,
+            path: None,
+        })
+    }
+
+    /// The file backing this handle, if it was opened from one.
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
     }
 
     /// Read-only projection of the database for display/search.
@@ -141,49 +175,72 @@ impl DbHandle {
         self.inner.config.version = keepass::config::DatabaseVersion::KDB4(1);
     }
 
-    /// Guarded save per the ADR-0005 recipe.
+    /// Serialize the in-memory database to KDBX 4.1 bytes.
+    ///
+    /// The bytes are round-trip verified before they are returned: a fresh
+    /// in-memory database is re-opened from them and compared with `self`, so a
+    /// caller that writes them (a file or a cloud backend) never persists data
+    /// this writer cannot read back.
     ///
     /// # Errors
     ///
     /// Returns [`KdbxError::UnsupportedForWrite`] for databases that are not
-    /// KDBX 4.1, [`KdbxError::Io`] on filesystem failures, and
-    /// [`KdbxError::Parse`] on serialization or round-trip verification
-    /// failures.
-    pub fn save(&self, key: &CompositeKey, opts: &SaveOptions) -> Result<SaveReport, KdbxError> {
+    /// KDBX 4.1, and [`KdbxError::Parse`] on serialization or round-trip
+    /// verification failures.
+    pub fn serialize(&self, key: &CompositeKey) -> Result<Vec<u8>, KdbxError> {
         // 1. Serialize off-target; never write straight into the live file.
         let mut bytes = Vec::new();
         self.inner
             .save(&mut bytes, build_database_key(key)?)
             .map_err(map_save_error)?;
 
-        // 2. Optional backup of the previous file, taken before anything is replaced.
-        let backup_path = if opts.backup {
-            backup_previous(&self.path, opts.timestamped_backup)?
-        } else {
-            None
-        };
-
-        // 3. Round-trip verify: re-open the freshly written bytes in memory and
-        //    compare against the in-memory database. Abort without writing if
-        //    the bytes do not round-trip.
+        // 2. Round-trip verify: re-open the freshly written bytes in memory and
+        //    compare against the in-memory database. Abort without returning
+        //    bytes if they do not round-trip.
         let reopened = KpDatabase::open(&mut Cursor::new(&bytes), build_database_key(key)?)
             .map_err(|err| KdbxError::Parse(format!("round-trip re-open failed: {err}")))?;
-        let round_trip_ok = reopened == self.inner;
-        if !round_trip_ok {
+        if reopened != self.inner {
             return Err(KdbxError::Parse(
                 "round-trip verification failed: the re-opened database differs from the in-memory database"
                     .to_string(),
             ));
         }
 
+        Ok(bytes)
+    }
+
+    /// Guarded save per the ADR-0005 recipe.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KdbxError::NotFileBacked`] when the handle was created by
+    /// [`DbHandle::open_bytes`], [`KdbxError::UnsupportedForWrite`] for
+    /// databases that are not KDBX 4.1, [`KdbxError::Io`] on filesystem
+    /// failures, and [`KdbxError::Parse`] on serialization or round-trip
+    /// verification failures.
+    pub fn save(&self, key: &CompositeKey, opts: &SaveOptions) -> Result<SaveReport, KdbxError> {
+        let Some(path) = self.path.as_deref() else {
+            return Err(KdbxError::NotFileBacked);
+        };
+
+        // 1–2. Serialize and round-trip verify before anything touches the disk.
+        let bytes = self.serialize(key)?;
+
+        // 3. Optional backup of the previous file, taken before anything is replaced.
+        let backup_path = if opts.backup {
+            backup_previous(path, opts.timestamped_backup)?
+        } else {
+            None
+        };
+
         // 4. Atomic replace: temp file in the same directory, fsync, rename
         //    over the target, then fsync the parent directory (on Unix).
-        write_atomically(&self.path, &bytes)?;
+        write_atomically(path, &bytes)?;
 
         // 5. Always surface the lossy-field warning to the caller.
         Ok(SaveReport {
             bytes_written: bytes.len(),
-            round_trip_ok,
+            round_trip_ok: true,
             backup_path,
             warnings: vec![LOSSY_FIELD_WARNING.to_string()],
         })
@@ -873,6 +930,62 @@ mod tests {
         assert!(matches!(
             handle.delete_group(bogus),
             Err(KdbxError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn open_bytes_round_trips_and_serialize_reproduces_content() {
+        let mut cleanup = TempFiles(Vec::new());
+        let (path, key) = seed_file(&mut cleanup, "open-bytes");
+
+        let original = fs::read(&path).expect("read seed file");
+        let mut handle = DbHandle::open_bytes(&original, &key).expect("open from bytes");
+
+        // The memory-backed handle has no path and refuses a file save.
+        assert_eq!(handle.path(), None);
+        assert!(matches!(
+            handle.save(&key, &SaveOptions::default()),
+            Err(KdbxError::NotFileBacked)
+        ));
+
+        // Mutate, serialize, and re-open the serialized bytes.
+        let root_uuid = handle.view().root.uuid;
+        handle
+            .add_entry(root_uuid, "Cloud Entry", "carol", "pa55")
+            .expect("add entry");
+        let bytes = handle.serialize(&key).expect("serialize");
+        assert!(!bytes.is_empty());
+
+        let reopened = DbHandle::open_bytes(&bytes, &key).expect("reopen serialized bytes");
+        let view = reopened.view();
+        assert_eq!(view.root.entries.len(), 2);
+        assert!(view
+            .root
+            .entries
+            .iter()
+            .any(|entry| entry.title == "Cloud Entry"));
+
+        // Serialized bytes are a real KDBX file: they open through the
+        // file-backed path too.
+        let serialized_path = cleanup.track(unique_temp_path("serialized"));
+        fs::write(&serialized_path, &bytes).expect("write serialized");
+        let handle = DbHandle::open(&serialized_path, &key).expect("open serialized file");
+        assert_eq!(handle.view().root.entries.len(), 2);
+    }
+
+    #[test]
+    fn serialize_refuses_to_write_with_a_wrong_key() {
+        let key = CompositeKey::new().with_password(PASSWORD);
+        let wrong = CompositeKey::new().with_password("not the password");
+
+        let mut bytes = Vec::new();
+        sample_db()
+            .save(&mut bytes, build_database_key(&key).expect("key"))
+            .expect("save sample");
+
+        assert!(matches!(
+            DbHandle::open_bytes(&bytes, &wrong),
+            Err(KdbxError::WrongCredentials)
         ));
     }
 }
