@@ -269,10 +269,7 @@ impl App {
                 match from_spec(spec.clone()) {
                     Ok(storage) => {
                         self.unlock_error = None;
-                        self.busy = Some(format!(
-                            "fetching {} \u{2014} this may take a moment",
-                            self.config.location.label()
-                        ));
+                        self.busy = Some(format!("fetching {}", self.config.location.label()));
                         self.pending = Some(Pending::Unlock { key, storage });
                     }
                     Err(err) => self.fail_unlock(err.to_string()),
@@ -780,10 +777,7 @@ impl App {
             // Defer the upload so the event loop can draw the busy message; the
             // upgrade above is already in memory, so `save_cloud` only needs to
             // serialize and push.
-            self.busy = Some(format!(
-                "saving to {} \u{2014} this may take a moment",
-                self.config.location.label()
-            ));
+            self.busy = Some(format!("saving to {}", self.config.location.label()));
             self.pending = Some(Pending::Save { upgraded });
             return;
         }
@@ -847,7 +841,7 @@ impl App {
             }
             Err(StorageError::Conflict(_)) => {
                 self.status = Status::Info(format!(
-                    "conflict: {label} changed remotely — lock (L) and unlock to reload; edits kept in memory"
+                    "conflict: {label} changed remotely — L then unlock to reload (edits kept)"
                 ));
             }
             Err(err) => self.status = Status::Info(format!("save failed: {err}")),
