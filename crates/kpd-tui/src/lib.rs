@@ -53,6 +53,7 @@ pub enum DbLocation {
 
 impl DbLocation {
     /// Human-readable location for the unlock screen and status bar.
+    #[must_use]
     pub fn label(&self) -> String {
         match self {
             Self::Local(path) => path.display().to_string(),
@@ -62,11 +63,38 @@ impl DbLocation {
         }
     }
 
+    /// Short label for the status bar: the file name, or the last path
+    /// segment of a cloud URL.
+    #[must_use]
+    pub fn short_label(&self) -> String {
+        match self {
+            Self::Local(path) | Self::Cloud(BackendSpec::Local { path }) => short_name(path),
+            Self::Cloud(BackendSpec::WebDav { url, .. }) => {
+                let path = url.split(['?', '#']).next().unwrap_or(url);
+                path.rsplit('/')
+                    .find(|segment| !segment.is_empty())
+                    .unwrap_or(path)
+                    .to_string()
+            }
+            Self::Cloud(BackendSpec::Dropbox { path, .. }) => {
+                short_name(std::path::Path::new(path))
+            }
+        }
+    }
+
     /// Whether saving goes through a [`Storage`](kpd_storage::Storage) backend
     /// instead of the local-file save path.
+    #[must_use]
     pub fn is_cloud(&self) -> bool {
         matches!(self, Self::Cloud(_))
     }
+}
+
+/// The final component of a path, falling back to the full path.
+fn short_name(path: &std::path::Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
 }
 
 /// Configuration for one `kpd-tui` run.

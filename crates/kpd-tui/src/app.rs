@@ -269,7 +269,8 @@ impl App {
                 match from_spec(spec.clone()) {
                     Ok(storage) => {
                         self.unlock_error = None;
-                        self.busy = Some(format!("fetching {}", self.config.location.label()));
+                        self.busy =
+                            Some(format!("fetching {}", self.config.location.short_label()));
                         self.pending = Some(Pending::Unlock { key, storage });
                     }
                     Err(err) => self.fail_unlock(err.to_string()),
@@ -319,7 +320,7 @@ impl App {
                 self.status = Status::Info(format!(
                     "loaded {} bytes from {}",
                     bytes.len(),
-                    self.config.location.label()
+                    self.config.location.short_label()
                 ));
             }
             Err(err) => self.fail_unlock(err.to_string()),
@@ -777,7 +778,7 @@ impl App {
             // Defer the upload so the event loop can draw the busy message; the
             // upgrade above is already in memory, so `save_cloud` only needs to
             // serialize and push.
-            self.busy = Some(format!("saving to {}", self.config.location.label()));
+            self.busy = Some(format!("saving to {}", self.config.location.short_label()));
             self.pending = Some(Pending::Save { upgraded });
             return;
         }
@@ -829,7 +830,7 @@ impl App {
             self.status = Status::Info("could not start the cloud runtime".to_string());
             return;
         };
-        let label = self.config.location.label();
+        let label = self.config.location.short_label();
         match runtime.block_on(cloud.storage.write(&bytes, cloud.revision.as_deref())) {
             Ok(meta) => {
                 cloud.revision = meta.revision;
@@ -839,10 +840,13 @@ impl App {
                 }
                 self.status = Status::Info(msg);
             }
-            Err(StorageError::Conflict(_)) => {
-                self.status = Status::Info(format!(
-                    "conflict: {label} changed remotely — L then unlock to reload (edits kept)"
-                ));
+            Err(StorageError::Conflict(detail)) => {
+                let reason = if detail.contains("locked") {
+                    "is locked by another client — try again shortly"
+                } else {
+                    "changed remotely — L then unlock to reload (edits kept)"
+                };
+                self.status = Status::Info(format!("conflict: {label} {reason}"));
             }
             Err(err) => self.status = Status::Info(format!("save failed: {err}")),
         }

@@ -306,7 +306,7 @@ fn render_status(frame: &mut Frame, app: &App, area: Rect) {
     let mut spans = vec![
         Span::styled(lock_label, lock_style),
         Span::raw(" · "),
-        Span::raw(app.config.location.label()),
+        Span::raw(app.config.location.short_label()),
         Span::raw(format!(" · {} entries", app.state.entry_count())),
     ];
 
