@@ -18,3 +18,7 @@ secrets/
 .DS_Store
 
 # NOTE: Cargo.lock is intentionally committed (this is a binary application).
+
+# Local agent docs (kept in the private kpd-agent repo)
+/docs/
+.codemap/
