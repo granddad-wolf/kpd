@@ -521,10 +521,16 @@ impl App {
 
     /// Guarded save of the database to its original path.
     fn save(&mut self) {
-        let Some(handle) = self.handle.as_ref() else {
+        let Some(handle) = self.handle.as_mut() else {
             self.status = Status::Info("not unlocked".to_string());
             return;
         };
+        // The writer only produces KDBX 4.1; upgrade KDBX 4.0 (and older) on
+        // save. The original file is preserved by the `.bak` backup.
+        let upgraded = !handle.is_kdbx41();
+        if upgraded {
+            handle.upgrade_to_kdbx41();
+        }
         let Some(key) = self.key.as_ref() else {
             self.status = Status::Info("no session key".to_string());
             return;
@@ -532,20 +538,17 @@ impl App {
 
         match handle.save(key, &SaveOptions::default()) {
             Ok(report) => {
-                self.status = Status::Info(format!(
-                    "saved {} bytes{}{}",
-                    report.bytes_written,
-                    if report.backup_path.is_some() {
-                        " (backup written)"
-                    } else {
-                        ""
-                    },
-                    if report.warnings.is_empty() {
-                        ""
-                    } else {
-                        " — warnings present"
-                    },
-                ));
+                let mut msg = format!("saved {} bytes", report.bytes_written);
+                if report.backup_path.is_some() {
+                    msg.push_str(" (backup written)");
+                }
+                if upgraded {
+                    msg.push_str(" — upgraded to KDBX 4.1");
+                }
+                if !report.warnings.is_empty() {
+                    msg.push_str(" — warnings present");
+                }
+                self.status = Status::Info(msg);
             }
             Err(err) => self.status = Status::Info(format!("save failed: {err}")),
         }
