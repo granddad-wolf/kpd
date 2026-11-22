@@ -24,6 +24,7 @@ authors = ["Maksim Tkachenko <347383041+granddad-wolf@users.noreply.github.com>"
 # implementation sprint so versions pin correctly on the Linux box. The stub
 # crates intentionally have zero deps so the workspace builds immediately.
 
+
 [workspace.lints.clippy]
 all = "warn"
 pedantic = "warn"

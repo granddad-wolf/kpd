@@ -19,3 +19,6 @@ kpd-crypto = { path = "../kpd-crypto" }
 kpd-plugin-runtime = { path = "../kpd-plugin-runtime" }
 # Runtime for the async cloud fetch/push subcommands.
 tokio = { version = "1", features = ["rt-multi-thread"] }
+
+[lints]
+workspace = true
