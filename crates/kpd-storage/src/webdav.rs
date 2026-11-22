@@ -90,8 +90,24 @@ impl Storage for WebDavStorage {
         data: &[u8],
         expected_revision: Option<&str>,
     ) -> Result<Meta, StorageError> {
+        // `If-Match` uses strong comparison (RFC 9110 §13.1.1), so a weak `ETag`
+        // can never match — plain Apache `mod_dav` emits weak `ETag`s
+        // (`W/"size-mtime"`), which made every conditional save fail with 412.
+        // For those servers, verify the revision with a HEAD first and then
+        // write unconditionally: not atomic, but a concurrent change is still
+        // caught rather than failing every save or overwriting silently.
+        if let Some(expected) = expected_revision.filter(|value| is_weak_etag(value)) {
+            let current = self.meta().await?;
+            if !etag_matches(current.revision.as_deref(), expected) {
+                return Err(StorageError::Conflict(format!(
+                    "expected revision {expected}, found {}",
+                    current.revision.as_deref().unwrap_or("none")
+                )));
+            }
+        }
+
         let mut request = self.request(Method::PUT);
-        if let Some(value) = if_match_value(expected_revision) {
+        if let Some(value) = if_match_value(strong_revision(expected_revision)) {
             request = request.header(IF_MATCH, value);
         }
         let response = request
@@ -135,6 +151,31 @@ impl Storage for WebDavStorage {
 /// `expected_revision` is supplied. `None` means unconditional last-write-wins.
 fn if_match_value(expected_revision: Option<&str>) -> Option<String> {
     expected_revision.map(str::to_owned)
+}
+
+/// Whether an `ETag` is weak (`W/"..."`). Weak tags can never satisfy `If-Match`,
+/// which requires a strong comparison.
+fn is_weak_etag(etag: &str) -> bool {
+    etag.trim_start().starts_with("W/")
+}
+
+/// The opaque value of an `ETag`, without the weak prefix.
+fn etag_value(etag: &str) -> &str {
+    let etag = etag.trim_start();
+    etag.strip_prefix("W/").unwrap_or(etag)
+}
+
+/// Weak comparison of two `ETag`s (RFC 9110 §8.8.3.2): the `W/` prefix is
+/// ignored. Apache `mod_dav` flips the same tag between weak (a file written
+/// moments ago) and strong (the same file once it has settled), so a strict
+/// string compare would report a spurious conflict between unlock and save.
+fn etag_matches(current: Option<&str>, expected: &str) -> bool {
+    current.is_some_and(|value| etag_value(value) == etag_value(expected))
+}
+
+/// The revision usable in an `If-Match` header: only strong `ETag`s qualify.
+fn strong_revision(revision: Option<&str>) -> Option<&str> {
+    revision.filter(|value| !is_weak_etag(value))
 }
 
 /// Map a non-success HTTP status onto a typed storage error when it is one we
@@ -186,11 +227,35 @@ fn ensure_success(response: Response) -> Result<Response, StorageError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{etag_from_headers, if_match_value, status_to_error, WebDavStorage};
+    use super::{
+        etag_from_headers, etag_matches, if_match_value, is_weak_etag, status_to_error,
+        strong_revision, WebDavStorage,
+    };
     use crate::{Storage, StorageError};
     use reqwest::header::{HeaderMap, HeaderValue, ETAG};
     use reqwest::StatusCode;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn weak_etags_are_detected_and_excluded_from_if_match() {
+        assert!(is_weak_etag("W/\"5-660e1f6b0b3af\""));
+        assert!(!is_weak_etag("\"5-660e1f6b0b3af\""));
+
+        // Weak ETags (e.g. plain Apache mod_dav) cannot be used in If-Match.
+        assert_eq!(strong_revision(Some("W/\"abc\"")), None);
+        assert_eq!(strong_revision(Some("\"abc\"")), Some("\"abc\""));
+        assert_eq!(strong_revision(None), None);
+    }
+
+    #[test]
+    fn etag_comparison_ignores_the_weak_prefix() {
+        // The same tag, weak on one side and strong on the other, still matches.
+        assert!(etag_matches(Some("\"733-abc\""), "W/\"733-abc\""));
+        assert!(etag_matches(Some("W/\"733-abc\""), "\"733-abc\""));
+        assert!(etag_matches(Some("W/\"733-abc\""), "W/\"733-abc\""));
+        assert!(!etag_matches(Some("\"763-def\""), "W/\"733-abc\""));
+        assert!(!etag_matches(None, "W/\"733-abc\""));
+    }
 
     #[test]
     fn if_match_header_present_iff_expected_revision_is_some() {
