@@ -22,3 +22,7 @@ secrets/
 # Local agent docs (kept in the private kpd-agent repo)
 /docs/
 .codemap/
+
+# Throwaway local test harnesses
+.tmp-*/
+
