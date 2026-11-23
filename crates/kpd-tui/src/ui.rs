@@ -23,12 +23,14 @@ const LOSSY_SAVE_WARNING: &str = "warning: saving re-serializes the database; \
 un-modeled or vendor-extension XML fields (e.g. KeePassXC <PreviousParentGroup>) \
 may be dropped";
 
-/// Render the current screen.
+/// Render the current screen, with a persistent key-hint bar on the last row.
 pub fn render(frame: &mut Frame, app: &App) {
+    let [body, tips] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
     match app.state.screen {
-        Screen::Unlock => render_unlock(frame, app),
-        Screen::Browse => render_browse(frame, app),
-        Screen::Detail => render_detail(frame, app),
+        Screen::Unlock => render_unlock(frame, app, body),
+        Screen::Browse => render_browse(frame, app, body),
+        Screen::Detail => render_detail(frame, app, body),
     }
     if app.state.plugin_menu.is_some() {
         render_plugin_menu(frame, app);
@@ -39,10 +41,11 @@ pub fn render(frame: &mut Frame, app: &App) {
     if let Some(label) = app.conflict_label() {
         render_conflict(frame, label);
     }
+    render_key_bar(frame, app, tips);
 }
 
-fn render_unlock(frame: &mut Frame, app: &App) {
-    let area = centered(frame.area(), 80, 16);
+fn render_unlock(frame: &mut Frame, app: &App, area: Rect) {
+    let area = centered(area, 80, 16);
 
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(Span::styled(
@@ -92,14 +95,14 @@ fn render_unlock(frame: &mut Frame, app: &App) {
     frame.render_widget(paragraph, area);
 }
 
-fn render_browse(frame: &mut Frame, app: &App) {
+fn render_browse(frame: &mut Frame, app: &App, area: Rect) {
     let prompt_h = prompt_lines(app);
     let [main, prompt_area, status] = Layout::vertical([
         Constraint::Min(0),
         Constraint::Length(prompt_h),
         Constraint::Length(1),
     ])
-    .areas(frame.area());
+    .areas(area);
     let [groups, entries] =
         Layout::horizontal([Constraint::Percentage(30), Constraint::Percentage(70)]).areas(main);
 
@@ -178,16 +181,14 @@ fn entry_item(db: &Database, entry_ref: &EntryRef) -> ListItem<'static> {
     }
 }
 
-fn render_detail(frame: &mut Frame, app: &App) {
+fn render_detail(frame: &mut Frame, app: &App, area: Rect) {
     let prompt_h = prompt_lines(app);
     let [main, prompt_area, status] = Layout::vertical([
         Constraint::Min(0),
         Constraint::Length(prompt_h),
         Constraint::Length(1),
     ])
-    .areas(frame.area());
-    let [body, help_area] =
-        Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(main);
+    .areas(area);
 
     let rows = app.state.detail_rows();
     let items: Vec<ListItem> = rows.iter().map(|row| detail_item(app, row)).collect();
@@ -198,13 +199,7 @@ fn render_detail(frame: &mut Frame, app: &App) {
 
     let mut state = ListState::default();
     state.select(Some(app.state.detail_index));
-    frame.render_stateful_widget(list, body, &mut state);
-
-    let help = Paragraph::new(Line::from(Span::styled(
-        "↑/↓ focus · Ctrl+C copy · r reveal · Esc back",
-        Style::default().fg(Color::DarkGray),
-    )));
-    frame.render_widget(help, help_area);
+    frame.render_stateful_widget(list, main, &mut state);
 
     render_prompt(frame, app, prompt_area);
     render_status(frame, app, status);
@@ -319,10 +314,7 @@ fn render_status(frame: &mut Frame, app: &App, area: Rect) {
     let hint = match app.busy_label() {
         Some(busy) => busy.to_string(),
         None => match app.status() {
-            Status::Idle => {
-                "Q quit · L lock · Ctrl+F search · Ctrl+C copy · P plugins · Ctrl+S save"
-                    .to_string()
-            }
+            Status::Idle => String::new(),
             Status::Info(info) => info.clone(),
             Status::Copy { copied_at, timeout } => {
                 let remaining = timeout.saturating_sub(copied_at.elapsed());
@@ -333,6 +325,34 @@ fn render_status(frame: &mut Frame, app: &App, area: Rect) {
     spans.push(Span::raw("   "));
     spans.push(Span::styled(hint, Style::default().fg(Color::DarkGray)));
 
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// Render the contextual key-hint bar, dropping tips that do not fit.
+fn render_key_bar(frame: &mut Frame, app: &App, area: Rect) {
+    let key_style = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD);
+    let label_style = Style::default().fg(Color::Gray);
+    let sep_style = Style::default().fg(Color::DarkGray);
+
+    let mut spans: Vec<Span> = Vec::new();
+    let mut used = 0usize;
+    let width = area.width as usize;
+    for (index, (key, label)) in app.key_tips().into_iter().enumerate() {
+        let piece_width = key.chars().count() + 1 + label.chars().count();
+        let separator_width = if index == 0 { 0 } else { 3 };
+        if used + separator_width + piece_width > width {
+            break;
+        }
+        if index > 0 {
+            spans.push(Span::styled(" │ ", sep_style));
+        }
+        spans.push(Span::styled(key, key_style));
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(label, label_style));
+        used += separator_width + piece_width;
+    }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 

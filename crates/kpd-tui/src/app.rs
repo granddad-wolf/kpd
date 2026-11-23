@@ -138,6 +138,65 @@ impl App {
         self.conflict.as_deref()
     }
 
+    /// Key hints for the bottom bar, contextual to the active screen or modal.
+    pub fn key_tips(&self) -> Vec<(&'static str, &'static str)> {
+        if self.busy.is_some() {
+            return vec![("…", "working")];
+        }
+        if self.conflict.is_some() {
+            return vec![
+                ("R", "Reload remote"),
+                ("O", "Overwrite remote"),
+                ("Esc", "Dismiss"),
+            ];
+        }
+        if self.state.plugin_result.is_some() {
+            return vec![("Any", "Close")];
+        }
+        if self.state.plugin_menu.is_some() {
+            return vec![("↑↓", "Move"), ("Enter", "Run"), ("Esc", "Close")];
+        }
+        if self.state.prompt != Prompt::None {
+            let confirm = matches!(
+                self.state.prompt,
+                Prompt::ConfirmDeleteEntry { .. }
+                    | Prompt::ConfirmDeleteGroup { .. }
+                    | Prompt::ConfirmSave
+            );
+            return if confirm {
+                vec![("Y", "Confirm"), ("N", "Cancel")]
+            } else {
+                vec![("Enter", "Submit"), ("Esc", "Cancel"), ("⌫", "Delete")]
+            };
+        }
+        match self.state.screen {
+            Screen::Unlock => vec![("Enter", "Unlock"), ("Esc", "Quit")],
+            Screen::Browse => vec![
+                ("Q", "Quit"),
+                ("L", "Lock"),
+                ("^S", "Save"),
+                ("P", "Plugins"),
+                ("^F", "Find"),
+                ("^C", "Copy"),
+                ("Tab", "Pane"),
+                ("Enter", "Open"),
+                ("A", "Add"),
+                ("E", "Edit"),
+                ("D", "Delete"),
+            ],
+            Screen::Detail => vec![
+                ("Q", "Quit"),
+                ("L", "Lock"),
+                ("Esc", "Back"),
+                ("^C", "Copy"),
+                ("R", "Reveal"),
+                ("E", "Edit"),
+                ("D", "Delete"),
+                ("^S", "Save"),
+            ],
+        }
+    }
+
     /// Whether deferred network work is waiting to run (the event loop must
     /// redraw and then call [`App::run_pending`]).
     pub const fn is_busy(&self) -> bool {
@@ -1154,6 +1213,52 @@ mod tests {
             Status::Info(message) => message.clone(),
             other => format!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn key_tips_follow_the_active_screen() {
+        let dir = TempDir::new("tips-screen");
+        let path = dir.db_path();
+        seed_db(&path, &["Alpha"]);
+
+        let mut app = App::new(AppConfig::new(&path));
+        assert_eq!(app.key_tips(), vec![("Enter", "Unlock"), ("Esc", "Quit")]);
+
+        unlock(&mut app, PASSWORD);
+        assert!(app.key_tips().contains(&("P", "Plugins")));
+        assert!(app.key_tips().contains(&("^S", "Save")));
+
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Enter);
+        assert!(app.key_tips().contains(&("Esc", "Back")));
+        assert!(app.key_tips().contains(&("R", "Reveal")));
+    }
+
+    #[test]
+    fn key_tips_follow_prompts_and_conflicts() {
+        let dir = TempDir::new("tips-modal");
+        let path = dir.db_path();
+        seed_db(&path, &["Alpha"]);
+
+        let mut app = cloud_app(&path);
+        unlock(&mut app, PASSWORD);
+
+        // A text prompt asks for submit/cancel.
+        press(&mut app, KeyCode::Char('e'));
+        assert!(app.key_tips().contains(&("Enter", "Submit")));
+        press(&mut app, KeyCode::Esc);
+
+        // A save conflict exposes the two resolutions.
+        seed_db(&path, &["Alpha", "Beta"]);
+        press(&mut app, KeyCode::Char('e'));
+        replace_input(&mut app, "local-edit");
+        press(&mut app, KeyCode::Enter);
+        press_ctrl(&mut app, 's');
+        press(&mut app, KeyCode::Char('y'));
+
+        assert_eq!(app.key_tips()[0], ("R", "Reload remote"));
+        assert_eq!(app.key_tips()[1], ("O", "Overwrite remote"));
+        assert_eq!(app.key_tips()[2], ("Esc", "Dismiss"));
     }
 
     #[test]
