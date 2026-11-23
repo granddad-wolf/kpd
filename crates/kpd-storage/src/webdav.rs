@@ -70,6 +70,8 @@ impl WebDavStorage {
         }
 
         let client = Client::builder()
+            .connect_timeout(crate::CONNECT_TIMEOUT)
+            .timeout(crate::REQUEST_TIMEOUT)
             .build()
             .map_err(|e| StorageError::Config(format!("failed to build HTTP client: {e}")))?;
 
@@ -333,7 +335,16 @@ fn etag_from_headers(headers: &HeaderMap) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// Map a `reqwest` failure, naming timeouts explicitly so a hung server shows
+/// up as such in the TUI instead of a generic HTTP error.
 fn http_error(e: reqwest::Error) -> StorageError {
+    if e.is_timeout() {
+        return StorageError::Http(format!(
+            "request timed out (connect timeout {}s, request timeout {}s)",
+            crate::CONNECT_TIMEOUT.as_secs(),
+            crate::REQUEST_TIMEOUT.as_secs()
+        ));
+    }
     StorageError::Http(e.to_string())
 }
 

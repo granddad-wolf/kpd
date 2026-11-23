@@ -9,12 +9,23 @@ mod local;
 mod registry;
 mod webdav;
 
+use std::time::Duration;
+
 pub mod dropbox;
 
 pub use dropbox::DropboxStorage;
 pub use local::LocalStorage;
 pub use registry::{from_spec, BackendSpec};
 pub use webdav::WebDavStorage;
+
+/// Timeout for establishing a connection to a cloud backend.
+///
+/// Without these, a black-holed endpoint leaves the caller (the TUI) blocked
+/// forever.
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Overall timeout for one cloud request (fetch or upload).
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Errors surfaced by any [`Storage`] backend.
 #[derive(Debug, thiserror::Error)]
