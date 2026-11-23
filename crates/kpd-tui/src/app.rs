@@ -83,8 +83,12 @@ enum Pending {
         storage: Box<dyn Storage>,
     },
     /// Upload the serialized in-memory database. `upgraded` carries whether
-    /// the save is the one that promoted the database to KDBX 4.1.
-    Save { upgraded: bool },
+    /// the save is the one that promoted the database to KDBX 4.1; `force`
+    /// uploads without the revision check (overwrite after a conflict).
+    Save { upgraded: bool, force: bool },
+    /// Re-fetch the remote database after a save conflict, discarding local
+    /// edits.
+    Reload,
 }
 
 /// The full runtime application state.
@@ -107,6 +111,8 @@ pub struct App {
     pending: Option<Pending>,
     /// Message shown while `pending` work runs (e.g. `fetching <url>`).
     busy: Option<String>,
+    /// Save conflict awaiting a choice: the short location label.
+    conflict: Option<String>,
 }
 
 impl App {
@@ -123,7 +129,13 @@ impl App {
             cloud: None,
             pending: None,
             busy: None,
+            conflict: None,
         }
+    }
+
+    /// The location label of an unresolved save conflict, if any.
+    pub fn conflict_label(&self) -> Option<&str> {
+        self.conflict.as_deref()
     }
 
     /// Whether deferred network work is waiting to run (the event loop must
@@ -146,7 +158,8 @@ impl App {
         self.busy = None;
         match pending {
             Pending::Unlock { key, storage } => self.finish_cloud_unlock(key, storage),
-            Pending::Save { upgraded } => self.save_cloud(upgraded),
+            Pending::Save { upgraded, force } => self.save_cloud(upgraded, force),
+            Pending::Reload => self.reload_remote(),
         }
     }
 
@@ -170,6 +183,10 @@ impl App {
         if self.pending.is_some() {
             return Control::Continue;
         }
+        // A save conflict captures the keyboard until resolved or dismissed.
+        if self.conflict.is_some() {
+            return self.handle_conflict_key(key);
+        }
         // A plugin-output modal captures the keyboard until dismissed.
         if self.state.plugin_result.is_some() {
             self.state.dismiss_plugin_result();
@@ -189,6 +206,44 @@ impl App {
             Screen::Browse => self.handle_browse_key(key),
             Screen::Detail => self.handle_detail_key(key),
         }
+    }
+
+    /// Handle a key while the save-conflict modal is open: `R` reloads the
+    /// remote (discarding local edits), `O` overwrites it, `Esc` dismisses.
+    fn handle_conflict_key(&mut self, key: &KeyEvent) -> Control {
+        let label = self.conflict.clone().unwrap_or_default();
+        match key.code {
+            KeyCode::Esc => {
+                self.conflict = None;
+                self.status = Status::Info(
+                    "conflict dismissed — local edits kept; save again to retry".to_string(),
+                );
+            }
+            KeyCode::Char('r') | KeyCode::Char('R') => {
+                self.conflict = None;
+                self.busy = Some(format!("reloading {label}"));
+                self.pending = Some(Pending::Reload);
+            }
+            KeyCode::Char('o') | KeyCode::Char('O') => {
+                self.conflict = None;
+                let upgraded = match self.handle.as_mut() {
+                    Some(handle) => {
+                        let upgraded = !handle.is_kdbx41();
+                        if upgraded {
+                            handle.upgrade_to_kdbx41();
+                        }
+                        upgraded
+                    }
+                    None => {
+                        self.status = Status::Info("not unlocked".to_string());
+                        return Control::Continue;
+                    }
+                };
+                self.begin_cloud_save(upgraded, true);
+            }
+            _ => {}
+        }
+        Control::Continue
     }
 
     /// Handle a key while the plugin picker is open.
@@ -778,8 +833,7 @@ impl App {
             // Defer the upload so the event loop can draw the busy message; the
             // upgrade above is already in memory, so `save_cloud` only needs to
             // serialize and push.
-            self.busy = Some(format!("saving to {}", self.config.location.short_label()));
-            self.pending = Some(Pending::Save { upgraded });
+            self.begin_cloud_save(upgraded, false);
             return;
         }
 
@@ -801,10 +855,17 @@ impl App {
         }
     }
 
+    /// Queue a cloud upload. `force` skips the revision check (overwrite after
+    /// a conflict); otherwise the session revision is the precondition.
+    fn begin_cloud_save(&mut self, upgraded: bool, force: bool) {
+        self.busy = Some(format!("saving to {}", self.config.location.short_label()));
+        self.pending = Some(Pending::Save { upgraded, force });
+    }
+
     /// Serialize the in-memory database and upload it with the revision the
-    /// session was opened at. A revision mismatch surfaces as a conflict and
+    /// session was opened at. A revision mismatch opens the conflict modal and
     /// leaves the remote untouched.
-    fn save_cloud(&mut self, upgraded: bool) {
+    fn save_cloud(&mut self, upgraded: bool, force: bool) {
         let Some(handle) = self.handle.as_ref() else {
             self.status = Status::Info("not unlocked".to_string());
             return;
@@ -831,24 +892,86 @@ impl App {
             return;
         };
         let label = self.config.location.short_label();
-        match runtime.block_on(cloud.storage.write(&bytes, cloud.revision.as_deref())) {
+        let expected = if force {
+            None
+        } else {
+            cloud.revision.as_deref()
+        };
+        match runtime.block_on(cloud.storage.write(&bytes, expected)) {
             Ok(meta) => {
                 cloud.revision = meta.revision;
                 let mut msg = format!("saved {} bytes to {}", bytes.len(), label);
+                if force {
+                    msg.push_str(" (overwrote remote)");
+                }
                 if upgraded {
                     msg.push_str(" — upgraded to KDBX 4.1");
                 }
                 self.status = Status::Info(msg);
             }
-            Err(StorageError::Conflict(detail)) => {
-                let reason = if detail.contains("locked") {
-                    "is locked by another client — try again shortly"
-                } else {
-                    "changed remotely — L then unlock to reload (edits kept)"
-                };
-                self.status = Status::Info(format!("conflict: {label} {reason}"));
+            Err(StorageError::Conflict(detail)) if detail.contains("locked") => {
+                self.status = Status::Info(format!(
+                    "conflict: {label} is locked by another client — try again shortly"
+                ));
+            }
+            Err(StorageError::Conflict(_)) => {
+                self.conflict = Some(label);
+                self.status = Status::Info(
+                    "save conflict — R reload remote · O overwrite remote".to_string(),
+                );
             }
             Err(err) => self.status = Status::Info(format!("save failed: {err}")),
+        }
+    }
+
+    /// Re-fetch the remote database after a conflict and replace the in-memory
+    /// copy, discarding local edits.
+    fn reload_remote(&mut self) {
+        let Some(key) = self.key.as_ref() else {
+            self.status = Status::Info("no session key".to_string());
+            return;
+        };
+        let Some(cloud) = self.cloud.as_ref() else {
+            self.status = Status::Info("no cloud session — unlock again".to_string());
+            return;
+        };
+        let Ok(runtime) = tokio::runtime::Runtime::new() else {
+            self.status = Status::Info("could not start the cloud runtime".to_string());
+            return;
+        };
+        let fetched = runtime.block_on(async {
+            let meta = cloud.storage.meta().await?;
+            let bytes = cloud.storage.read().await?;
+            Ok::<_, StorageError>((bytes, meta.revision))
+        });
+
+        let (bytes, revision) = match fetched {
+            Ok(fetched) => fetched,
+            Err(err) => {
+                self.status = Status::Info(format!("reload failed: {err}"));
+                return;
+            }
+        };
+
+        match DbHandle::open_bytes(&bytes, key) {
+            Ok(handle) => {
+                let view = handle.view();
+                self.handle = Some(handle);
+                if let Some(cloud) = self.cloud.as_mut() {
+                    cloud.revision = revision;
+                }
+                self.state.replace_db(view);
+                if self.state.screen == Screen::Detail && self.state.detail_entry().is_none() {
+                    self.state.close_detail();
+                }
+                self.clear_clipboard_guard();
+                self.status = Status::Info(format!(
+                    "reloaded {} bytes from {} — local edits discarded",
+                    bytes.len(),
+                    self.config.location.short_label()
+                ));
+            }
+            Err(err) => self.status = Status::Info(format!("reload failed: {err}")),
         }
     }
 
@@ -892,6 +1015,7 @@ impl App {
         self.cloud = None;
         self.pending = None;
         self.busy = None;
+        self.conflict = None;
         self.state.lock();
         self.status = Status::Idle;
         self.unlock = UnlockInput::default();
@@ -1087,15 +1211,96 @@ mod tests {
         press_ctrl(&mut app, 's');
         press(&mut app, KeyCode::Char('y'));
 
-        let status = info(&app);
-        assert!(
-            status.contains("conflict"),
-            "expected conflict, got: {status}"
+        assert_eq!(
+            app.conflict_label(),
+            Some("db.kdbx"),
+            "expected the conflict modal, got status: {}",
+            info(&app)
         );
+        assert!(info(&app).contains("conflict"));
 
         // The remote bytes are exactly what the other writer left.
         let remote_now = fs::read(&path).expect("read remote after refused save");
         assert_eq!(remote_now, remote_after_change);
+    }
+
+    #[test]
+    fn conflict_reload_replaces_the_database_and_discards_local_edits() {
+        let dir = TempDir::new("conflict-reload");
+        let path = dir.db_path();
+        seed_db(&path, &["Alpha"]);
+
+        let mut app = cloud_app(&path);
+        unlock(&mut app, PASSWORD);
+        assert_eq!(app.unlock_error(), None);
+
+        // A concurrent writer replaces the remote with two entries.
+        seed_db(&path, &["Alpha", "Beta"]);
+
+        // Local edit that must be thrown away by the reload.
+        press(&mut app, KeyCode::Char('e'));
+        replace_input(&mut app, "local-edit");
+        press(&mut app, KeyCode::Enter);
+        press_ctrl(&mut app, 's');
+        press(&mut app, KeyCode::Char('y'));
+        assert!(app.conflict_label().is_some());
+
+        press(&mut app, KeyCode::Char('r'));
+
+        assert!(
+            app.conflict_label().is_none(),
+            "reload should clear the conflict"
+        );
+        let status = info(&app);
+        assert!(status.contains("reloaded"), "{status}");
+        let key = CompositeKey::new().with_password(PASSWORD);
+        let reopened = DbHandle::open(&path, &key).expect("reopen remote");
+        assert_eq!(app.state.entry_count(), reopened.view().root.entries.len());
+        assert_eq!(
+            app.state.entry_count(),
+            2,
+            "reload must adopt the remote state"
+        );
+        let db = app.state.db.as_ref().expect("unlocked after reload");
+        assert_eq!(db.root.entries[1].title, "Beta");
+        // The discarded edit did not leak into the reloaded view.
+        assert_eq!(db.root.entries[0].password.expose_secret(), "hunter2");
+    }
+
+    #[test]
+    fn conflict_overwrite_keeps_local_edits_and_forces_the_remote() {
+        let dir = TempDir::new("conflict-overwrite");
+        let path = dir.db_path();
+        seed_db(&path, &["Alpha"]);
+
+        let mut app = cloud_app(&path);
+        unlock(&mut app, PASSWORD);
+        assert_eq!(app.unlock_error(), None);
+
+        // A concurrent writer changes the remote after unlock.
+        seed_db(&path, &["Alpha", "Beta"]);
+
+        press(&mut app, KeyCode::Char('e'));
+        replace_input(&mut app, "local-edit");
+        press(&mut app, KeyCode::Enter);
+        press_ctrl(&mut app, 's');
+        press(&mut app, KeyCode::Char('y'));
+        assert!(app.conflict_label().is_some());
+
+        // O forces the upload with the local edits, discarding the remote state.
+        press(&mut app, KeyCode::Char('o'));
+
+        assert!(app.conflict_label().is_none());
+        let status = info(&app);
+        assert!(status.contains("saved"), "{status}");
+        assert!(status.contains("overwrote remote"), "{status}");
+
+        let key = CompositeKey::new().with_password(PASSWORD);
+        let reopened = DbHandle::open(&path, &key).expect("reopen remote");
+        let view = reopened.view();
+        assert_eq!(view.root.entries.len(), 1);
+        assert_eq!(view.root.entries[0].title, "Alpha");
+        assert_eq!(view.root.entries[0].password.expose_secret(), "local-edit");
     }
 
     #[test]

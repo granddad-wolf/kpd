@@ -9,7 +9,7 @@ use kpd_kdbx::EntryField;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
 use secrecy::ExposeSecret;
 
@@ -36,10 +36,13 @@ pub fn render(frame: &mut Frame, app: &App) {
     if let Some(result) = &app.state.plugin_result {
         render_plugin_result(frame, result);
     }
+    if let Some(label) = app.conflict_label() {
+        render_conflict(frame, label);
+    }
 }
 
 fn render_unlock(frame: &mut Frame, app: &App) {
-    let area = centered(frame.area(), 64, 14);
+    let area = centered(frame.area(), 80, 16);
 
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(Span::styled(
@@ -82,7 +85,10 @@ fn render_unlock(frame: &mut Frame, app: &App) {
         Style::default().fg(Color::DarkGray),
     )));
 
-    let paragraph = Paragraph::new(lines).block(Block::bordered().title("Unlock"));
+    let paragraph = Paragraph::new(lines)
+        .block(Block::bordered().title("Unlock"))
+        // Long cloud errors (timeouts, URLs) wrap instead of being clipped.
+        .wrap(Wrap { trim: true });
     frame.render_widget(paragraph, area);
 }
 
@@ -368,6 +374,36 @@ fn render_plugin_result(frame: &mut Frame, result: &str) {
     let area = centered(frame.area(), width, height);
     let paragraph =
         Paragraph::new(lines).block(Block::bordered().title("Plugin result — any key to close"));
+    frame.render_widget(paragraph, area);
+}
+
+/// Render the save-conflict modal: reload the remote or overwrite it.
+fn render_conflict(frame: &mut Frame, label: &str) {
+    let bold = Style::default().add_modifier(Modifier::BOLD);
+    let lines = vec![
+        Line::from(format!(
+            "{label} changed on the remote since you unlocked it."
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("R", bold),
+            Span::raw("  reload remote — discards local edits"),
+        ]),
+        Line::from(vec![
+            Span::styled("O", bold),
+            Span::raw("  overwrite remote — keeps local edits"),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Esc  dismiss (local edits stay in memory)",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+    let width = frame.area().width.min(72);
+    let height = (lines.len() as u16 + 2).min(frame.area().height);
+    let area = centered(frame.area(), width, height);
+    let paragraph = Paragraph::new(lines)
+        .block(Block::bordered().title("Save conflict — R reload · O overwrite"));
     frame.render_widget(paragraph, area);
 }
 
