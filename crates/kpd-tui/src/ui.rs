@@ -13,7 +13,7 @@ use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
 use secrecy::ExposeSecret;
 
-use crate::app::{App, Status};
+use crate::app::{App, PluginConsent, Status};
 use crate::state::{DetailValue, Focus, Prompt, Screen};
 
 /// Standing save caveat shown before a save is confirmed: re-serializing the
@@ -40,6 +40,9 @@ pub fn render(frame: &mut Frame, app: &App) {
     }
     if let Some(label) = app.conflict_label() {
         render_conflict(frame, label);
+    }
+    if let Some(consent) = app.consent() {
+        render_consent(frame, consent);
     }
     render_key_bar(frame, app, tips);
 }
@@ -394,6 +397,39 @@ fn render_plugin_result(frame: &mut Frame, result: &str) {
     let area = centered(frame.area(), width, height);
     let paragraph =
         Paragraph::new(lines).block(Block::bordered().title("Plugin result — any key to close"));
+    frame.render_widget(paragraph, area);
+}
+
+/// Render the plugin consent prompt for a manifest's declared capabilities.
+fn render_consent(frame: &mut Frame, consent: &PluginConsent) {
+    let bold = Style::default().add_modifier(Modifier::BOLD);
+    let mut lines = vec![
+        Line::from(Span::styled(consent.name.clone(), bold)),
+        Line::from(""),
+        Line::from("This plugin asks for:"),
+    ];
+    if consent.capabilities.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  (no capabilities)",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    for permission in &consent.capabilities {
+        lines.push(Line::from(format!("  • {}", permission.label())));
+    }
+    if let Some(description) = &consent.description {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            description.clone(),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    let width = frame.area().width.min(76);
+    let height = (lines.len() as u16 + 2).min(frame.area().height);
+    let area = centered(frame.area(), width, height);
+    let paragraph = Paragraph::new(lines)
+        .block(Block::bordered().title("Plugin consent"))
+        .wrap(Wrap { trim: true });
     frame.render_widget(paragraph, area);
 }
 

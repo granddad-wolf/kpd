@@ -10,6 +10,7 @@
 
 use kpd_core::db::{Database, Entry, EntryRef, Group};
 use kpd_kdbx::EntryField;
+use kpd_plugin_runtime::Permission;
 use secrecy::{ExposeSecret, SecretString};
 use uuid::Uuid;
 
@@ -101,9 +102,11 @@ pub enum Prompt {
         group_uuid: Uuid,
     },
     ConfirmSave,
-    /// Typing a command line for `wasm` (chosen in the plugin picker).
+    /// Typing a command line for `wasm` (chosen in the plugin picker and
+    /// approved with `permissions`).
     PluginCommand {
         wasm: std::path::PathBuf,
+        permissions: Vec<Permission>,
     },
 }
 
@@ -521,11 +524,11 @@ impl State {
     }
 
     /// Close the picker and begin typing a command line for `wasm`.
-    pub fn begin_plugin_command(&mut self, wasm: std::path::PathBuf) {
+    pub fn begin_plugin_command(&mut self, wasm: std::path::PathBuf, permissions: Vec<Permission>) {
         self.plugin_menu = None;
         self.input.clear();
         self.masked_input = false;
-        self.prompt = Prompt::PluginCommand { wasm };
+        self.prompt = Prompt::PluginCommand { wasm, permissions };
     }
 
     /// Show a plugin's output in a modal and clear the prompt.

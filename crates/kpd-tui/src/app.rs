@@ -10,6 +10,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use kpd_clipboard::{copy_autoclear, ClipboardGuard};
 use kpd_crypto::CompositeKey;
 use kpd_kdbx::{DbHandle, EntryField, SaveOptions};
+use kpd_plugin_runtime::{Permission, PluginManifest};
 use kpd_storage::{from_spec, Storage, StorageError};
 
 use crate::state::{AddEntryOutcome, Move, Prompt, Screen, State};
@@ -91,6 +92,19 @@ enum Pending {
     Reload,
 }
 
+/// A plugin awaiting the user's consent to its declared capabilities.
+#[derive(Debug, Clone)]
+pub struct PluginConsent {
+    /// The component that would run.
+    pub wasm: std::path::PathBuf,
+    /// Manifest display name.
+    pub name: String,
+    /// Optional manifest description.
+    pub description: Option<String>,
+    /// Capabilities the manifest declares.
+    pub capabilities: Vec<Permission>,
+}
+
 /// The full runtime application state.
 pub struct App {
     pub config: AppConfig,
@@ -113,6 +127,8 @@ pub struct App {
     busy: Option<String>,
     /// Save conflict awaiting a choice: the short location label.
     conflict: Option<String>,
+    /// A plugin manifest awaiting consent, if any.
+    consent: Option<PluginConsent>,
 }
 
 impl App {
@@ -130,12 +146,18 @@ impl App {
             pending: None,
             busy: None,
             conflict: None,
+            consent: None,
         }
     }
 
     /// The location label of an unresolved save conflict, if any.
     pub fn conflict_label(&self) -> Option<&str> {
         self.conflict.as_deref()
+    }
+
+    /// The plugin manifest awaiting consent, if any.
+    pub fn consent(&self) -> Option<&PluginConsent> {
+        self.consent.as_ref()
     }
 
     /// Key hints for the bottom bar, contextual to the active screen or modal.
@@ -153,8 +175,11 @@ impl App {
         if self.state.plugin_result.is_some() {
             return vec![("Any", "Close")];
         }
+        if self.consent.is_some() {
+            return vec![("Y", "Allow"), ("N", "Cancel")];
+        }
         if self.state.plugin_menu.is_some() {
-            return vec![("↑↓", "Move"), ("Enter", "Run"), ("Esc", "Close")];
+            return vec![("↑↓", "Move"), ("Enter", "Review"), ("Esc", "Close")];
         }
         if self.state.prompt != Prompt::None {
             let confirm = matches!(
@@ -246,6 +271,10 @@ impl App {
         if self.conflict.is_some() {
             return self.handle_conflict_key(key);
         }
+        // A plugin consent prompt captures the keyboard until answered.
+        if self.consent.is_some() {
+            return self.handle_consent_key(key);
+        }
         // A plugin-output modal captures the keyboard until dismissed.
         if self.state.plugin_result.is_some() {
             self.state.dismiss_plugin_result();
@@ -265,6 +294,36 @@ impl App {
             Screen::Browse => self.handle_browse_key(key),
             Screen::Detail => self.handle_detail_key(key),
         }
+    }
+
+    /// Handle a key while the plugin consent prompt is open: `Y`/`Enter`
+    /// grants the manifest's capabilities and proceeds, `N`/`Esc` cancels.
+    fn handle_consent_key(&mut self, key: &KeyEvent) -> Control {
+        match key.code {
+            KeyCode::Char('y' | 'Y') | KeyCode::Enter => {
+                if let Some(consent) = self.consent.take() {
+                    self.status = Status::Info(format!(
+                        "{}: granted {}",
+                        consent.name,
+                        consent
+                            .capabilities
+                            .iter()
+                            .map(|permission| permission.label())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                    self.state
+                        .begin_plugin_command(consent.wasm, consent.capabilities);
+                }
+            }
+            KeyCode::Char('n' | 'N') | KeyCode::Esc => {
+                if let Some(consent) = self.consent.take() {
+                    self.status = Status::Info(format!("cancelled {}", consent.name));
+                }
+            }
+            _ => {}
+        }
+        Control::Continue
     }
 
     /// Handle a key while the save-conflict modal is open: `R` reloads the
@@ -322,7 +381,20 @@ impl App {
             }
             KeyCode::Enter => {
                 if let Some(wasm) = self.state.plugin_menu_selected().cloned() {
-                    self.state.begin_plugin_command(wasm);
+                    match PluginManifest::load(&wasm) {
+                        Ok(manifest) => {
+                            self.state.close_plugin_menu();
+                            self.consent = Some(PluginConsent {
+                                wasm,
+                                name: manifest.name,
+                                description: manifest.description,
+                                capabilities: manifest.capabilities,
+                            });
+                        }
+                        Err(err) => {
+                            self.status = Status::Info(format!("plugin manifest: {err}"));
+                        }
+                    }
                 }
                 Control::Continue
             }
@@ -751,9 +823,9 @@ impl App {
                 );
             }
             Prompt::ConfirmSave => self.save(),
-            Prompt::PluginCommand { wasm } => {
+            Prompt::PluginCommand { wasm, permissions } => {
                 let command_line = std::mem::take(&mut self.state.input);
-                self.run_plugin(&wasm, &command_line);
+                self.run_plugin(&wasm, &permissions, &command_line);
             }
             Prompt::AddEntryTitle
             | Prompt::AddEntryUsername { .. }
@@ -810,8 +882,13 @@ impl App {
 
     /// Run the selected plugin against the open database's entries and show its
     /// output in a modal.
-    fn run_plugin(&mut self, wasm: &std::path::Path, command_line: &str) {
-        use kpd_plugin_runtime::{EntrySummary, Limits, Permission, PluginRuntime, RunContext};
+    fn run_plugin(
+        &mut self,
+        wasm: &std::path::Path,
+        permissions: &[Permission],
+        command_line: &str,
+    ) {
+        use kpd_plugin_runtime::{EntrySummary, Limits, PluginRuntime, RunContext};
 
         let mut parts = command_line.split_whitespace();
         let Some(command) = parts.next() else {
@@ -837,8 +914,7 @@ impl App {
         };
 
         let runtime = PluginRuntime::new();
-        let permissions = [Permission::EntriesRead, Permission::ClipboardWrite];
-        let mut plugin = match runtime.load(wasm, &permissions, Limits::default()) {
+        let mut plugin = match runtime.load(wasm, permissions, Limits::default()) {
             Ok(plugin) => plugin,
             Err(err) => {
                 self.state.cancel_prompt();
@@ -1075,6 +1151,7 @@ impl App {
         self.pending = None;
         self.busy = None;
         self.conflict = None;
+        self.consent = None;
         self.state.lock();
         self.status = Status::Idle;
         self.unlock = UnlockInput::default();
@@ -1213,6 +1290,70 @@ mod tests {
             Status::Info(message) => message.clone(),
             other => format!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn plugin_consent_lists_manifest_capabilities_and_grants_them() {
+        let dir = TempDir::new("plugin-consent");
+        let wasm = dir.0.join("demo.wasm");
+        fs::write(&wasm, b"not a component").expect("write wasm placeholder");
+        fs::write(
+            dir.0.join("demo.toml"),
+            "name = \"demo\"\ndescription = \"demo plugin\"\ncapabilities = [\"entries.read\"]\n",
+        )
+        .expect("write manifest");
+
+        let mut app = App::new(AppConfig::new(dir.0.join("unused.kdbx")));
+        let menu = || crate::state::PluginMenu {
+            paths: vec![wasm.clone()],
+            index: 0,
+        };
+
+        app.state.plugin_menu = Some(menu());
+        press(&mut app, KeyCode::Enter);
+
+        let consent = app.consent().expect("consent prompt");
+        assert_eq!(consent.name, "demo");
+        assert_eq!(consent.capabilities, vec![Permission::EntriesRead]);
+        assert!(app.key_tips().contains(&("Y", "Allow")));
+
+        // Declining leaves no prompt behind.
+        press(&mut app, KeyCode::Char('n'));
+        assert!(app.consent().is_none());
+        assert_eq!(app.state.prompt, Prompt::None);
+
+        // Approving proceeds to the command prompt with the declared grants.
+        app.state.plugin_menu = Some(menu());
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Char('y'));
+        match &app.state.prompt {
+            Prompt::PluginCommand {
+                wasm: path,
+                permissions,
+            } => {
+                assert_eq!(path, &wasm);
+                assert_eq!(permissions, &vec![Permission::EntriesRead]);
+            }
+            other => panic!("expected a plugin command prompt, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plugin_without_a_manifest_is_refused() {
+        let dir = TempDir::new("plugin-no-manifest");
+        let wasm = dir.0.join("demo.wasm");
+        fs::write(&wasm, b"not a component").expect("write wasm placeholder");
+
+        let mut app = App::new(AppConfig::new(dir.0.join("unused.kdbx")));
+        app.state.plugin_menu = Some(crate::state::PluginMenu {
+            paths: vec![wasm],
+            index: 0,
+        });
+        press(&mut app, KeyCode::Enter);
+
+        assert!(app.consent().is_none());
+        assert!(info(&app).contains("manifest"), "{}", info(&app));
+        assert_eq!(app.state.prompt, Prompt::None);
     }
 
     #[test]
