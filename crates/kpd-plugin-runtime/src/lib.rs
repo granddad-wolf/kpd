@@ -38,6 +38,10 @@ use wasmtime::{Engine, Store, StoreLimits, StoreLimitsBuilder};
 use wasmtime::component::ResourceTable;
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
+mod manifest;
+
+pub use manifest::{ManifestError, PluginManifest};
+
 /// Generated host bindings for the `plugin` world.
 ///
 /// The `bindgen!` path is resolved relative to this crate's `Cargo.toml`
@@ -60,6 +64,43 @@ pub enum Permission {
     EntriesRead,
     /// Allow writing to the host clipboard via `clipboard.copy`.
     ClipboardWrite,
+}
+
+impl Permission {
+    /// Every capability this host knows about.
+    pub const ALL: [Permission; 2] = [Permission::EntriesRead, Permission::ClipboardWrite];
+
+    /// Stable identifier used in a `plugin.toml` manifest.
+    #[must_use]
+    pub const fn id(self) -> &'static str {
+        match self {
+            Permission::EntriesRead => "entries.read",
+            Permission::ClipboardWrite => "clipboard.write",
+        }
+    }
+
+    /// Human-readable wording for the consent prompt.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Permission::EntriesRead => "read entries (title and username only)",
+            Permission::ClipboardWrite => "write text to the clipboard",
+        }
+    }
+
+    /// Parse the identifier used in a `plugin.toml` manifest.
+    #[must_use]
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|permission| permission.id() == id)
+    }
+}
+
+impl std::fmt::Display for Permission {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.id())
+    }
 }
 
 /// A filtered, secret-free view of a single entry.

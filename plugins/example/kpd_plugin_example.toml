@@ -1,0 +1,4 @@
+name = "kpd_plugin_example"
+version = "0.1.0"
+description = "Demo plugin: count entries, search titles/usernames, copy text."
+capabilities = ["entries.read", "clipboard.write"]

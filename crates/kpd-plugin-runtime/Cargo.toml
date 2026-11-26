@@ -12,6 +12,9 @@ description = "Host loader and capability-gated sandbox (wasmtime) for kpd plugi
 wasmtime = "50.0.2"
 thiserror = "2"
 wasmtime-wasi = "50.0.2"
+# `plugin.toml` capability manifests.
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
 
 [lints]
 workspace = true

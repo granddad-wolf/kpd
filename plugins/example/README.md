@@ -16,6 +16,28 @@ workspace) and implements the guest side of the `plugin` world defined in
 
 It also demonstrates `logging.log`, which is always available (no grant needed).
 
+## Manifest
+
+`kpd_plugin_example.toml` declares the capabilities the plugin uses:
+
+```toml
+capabilities = ["entries.read", "clipboard.write"]
+```
+
+The host requires a manifest next to the component (`<name>.wasm` ←
+`<name>.toml`). The TUI shows a consent prompt listing these capabilities
+before it runs the plugin; the CLI refuses to run without a manifest.
+
+## Install
+
+Copy the manifest together with the component, keeping the stems equal:
+
+```sh
+mkdir -p ~/.config/kpd/plugins
+cp target/wasm32-wasip2/release/kpd_plugin_example.wasm \
+   kpd_plugin_example.toml ~/.config/kpd/plugins/
+```
+
 ## Build
 
 Run these commands **from this directory** (`kpd/plugins/example`):

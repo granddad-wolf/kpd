@@ -23,7 +23,9 @@ Implemented:
 - Open and save directly against cloud storage from the TUI (`kpd open --webdav`
   / `--dropbox`), with revision-conflict detection.
 - WASM plugin system (capability-gated, empty-WASI sandbox, fuel/memory limits)
-  with a `P` plugin picker in the TUI and a `kpd plugin` CLI.
+  with a `P` plugin picker in the TUI and a `kpd plugin` CLI. Each plugin ships
+  a `plugin.toml` manifest declaring its capabilities; the TUI shows a consent
+  prompt and the CLI refuses plugins without a manifest.
 
 Planned:
 

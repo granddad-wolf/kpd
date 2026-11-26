@@ -2,6 +2,9 @@
 /target
 **/*.rs.bk
 
+# Standalone example plugin build output
+/plugins/example/target/
+
 # Secrets & password databases — never commit these
 *.kdbx
 *.kdbx.bak

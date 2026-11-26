@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use kpd_crypto::CompositeKey;
-use kpd_plugin_runtime::{EntrySummary, Limits, Permission, PluginRuntime, RunContext};
+use kpd_plugin_runtime::{EntrySummary, Limits, PluginRuntime, RunContext};
 use kpd_storage::{from_spec, BackendSpec, Storage};
 use kpd_tui::{run, AppConfig};
 
@@ -314,10 +314,11 @@ fn run_plugin(command: PluginCommand) -> Result<(), String> {
         None => Vec::new(),
     };
 
+    let manifest = kpd_plugin_runtime::PluginManifest::load(&command.wasm)
+        .map_err(|err| format!("plugin manifest: {err}"))?;
     let runtime = PluginRuntime::new();
-    let permissions = [Permission::EntriesRead, Permission::ClipboardWrite];
     let mut plugin = runtime
-        .load(&command.wasm, &permissions, Limits::default())
+        .load(&command.wasm, &manifest.capabilities, Limits::default())
         .map_err(|err| format!("load plugin: {err}"))?;
 
     let mut ctx = RunContext {
@@ -360,6 +361,9 @@ fn print_help() {
          \x20   KPD_DROPBOX_TOKEN                    Dropbox OAuth2 access token\n\n\
          PLUGIN ENV VARS:\n\
          \x20   KPD_DB_PASSWORD   Master password for `plugin --db` (default variable)\n\n\
+         PLUGIN MANIFESTS:\n\
+         \x20   A plugin must ship <name>.toml next to the .wasm, declaring\n\
+         \x20   capabilities = [\"entries.read\", \"clipboard.write\"].\n\n\
          FLAGS:\n\
          \x20   -V, --version   Print version\n\
          \x20   -h, --help      Print help",
